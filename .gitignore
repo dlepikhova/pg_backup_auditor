@@ -1,0 +1,93 @@
+# Compiled Object files
+*.o
+*.obj
+
+# Executables
+pg_backup_auditor
+*.exe
+*.out
+
+# Dependencies
+.depend
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Coverage files
+*.gcda
+*.gcno
+*.gcov
+coverage.info
+coverage/
+
+# Build directories
+build/
+builddir/
+.build/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test artifacts
+tests/integration/.pytest_cache/
+tests/integration/__pycache__/
+*.pyc
+.coverage
+htmlcov/
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+.*.tmp
+
+# Stray sample files in root
+/backup_label
+
+# Internal development docs (not for public repo)
+/PROGRESS.md
+/description.md
+/PROJECT_STRUCTURE.md
+/TESTING.md
+/CHANGELOG.md
+/test_real_backups.sh
+docs/DEVELOPER.md
+docs/ARCHITECTURE.md
+
+# Test data (local fixtures only)
+test_data/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+.fuse_hidden*
+.directory
+.Trash-*
+
+# Core dumps
+core
+core.*
+vgcore.*
+
+# Valgrind
+*.memcheck
+massif.out.*
+
+# Performance profiling
+perf.data
+perf.data.old
+*.trace
+flamegraph.svg
