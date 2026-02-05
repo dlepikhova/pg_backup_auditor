@@ -27,6 +27,11 @@
 #include <time.h>
 #include <limits.h>
 
+/* PATH_MAX fallback for systems where it's not defined */
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
 /* PostgreSQL types */
 typedef uint64_t XLogRecPtr;
 typedef uint32_t TimeLineID;

@@ -19,6 +19,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#define _POSIX_C_SOURCE 200809L
 
 #include "pg_backup_auditor.h"
 #include <stdio.h>
@@ -280,8 +281,13 @@ pg_basebackup_scan(const char *backup_path)
 		char version_str[32];
 		if (fgets(version_str, sizeof(version_str), ver_fp) != NULL)
 		{
-			info->pg_version = atoi(version_str) * 10000;
-			log_debug("Read PG_VERSION from file: major=%d", info->pg_version / 10000);
+			/* Parse major.minor format (e.g., "16.1" -> 160001) */
+			int major = 0, minor = 0;
+			if (sscanf(version_str, "%d.%d", &major, &minor) >= 1)
+			{
+				info->pg_version = major * 10000 + minor;
+				log_debug("Read PG_VERSION from file: major=%d, minor=%d", major, minor);
+			}
 		}
 		fclose(ver_fp);
 	}
@@ -323,8 +329,13 @@ pg_basebackup_scan(const char *backup_path)
 						char version_str[32];
 						if (fgets(version_str, sizeof(version_str), ver_fp) != NULL)
 						{
-							info->pg_version = atoi(version_str) * 10000;
-							log_debug("Extracted PG_VERSION from tar: major=%d", info->pg_version / 10000);
+							/* Parse major.minor format (e.g., "16.1" -> 160001) */
+							int major = 0, minor = 0;
+							if (sscanf(version_str, "%d.%d", &major, &minor) >= 1)
+							{
+								info->pg_version = major * 10000 + minor;
+								log_debug("Extracted PG_VERSION from tar: major=%d, minor=%d", major, minor);
+							}
 						}
 						pclose(ver_fp);
 					}

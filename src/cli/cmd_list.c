@@ -19,6 +19,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#define _POSIX_C_SOURCE 200809L
 
 #include "pg_backup_auditor.h"
 #include "cmd_help.h"
@@ -26,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <getopt.h>
 
 /* Command-line options */
@@ -553,8 +555,7 @@ get_parent_directory(const char *backup_path, char *parent_dir, size_t parent_di
 	}
 
 	/* Copy the path */
-	strncpy(parent_dir, backup_path, parent_dir_size - 1);
-	parent_dir[parent_dir_size - 1] = '\0';
+	snprintf(parent_dir, parent_dir_size, "%s", backup_path);
 
 	/* Find last slash and truncate */
 	last_slash = strrchr(parent_dir, '/');
@@ -627,8 +628,7 @@ output_backups(const BackupInfo *backups, const ListOptions *opts)
 					}
 					if (!found && num_directories < 100)
 					{
-						strncpy(directory_paths[num_directories], parent_dir, PATH_MAX - 1);
-						directory_paths[num_directories][PATH_MAX - 1] = '\0';
+						snprintf(directory_paths[num_directories], PATH_MAX, "%s", parent_dir);
 						num_directories++;
 					}
 				}
@@ -647,12 +647,9 @@ output_backups(const BackupInfo *backups, const ListOptions *opts)
 					{
 						/* Swap */
 						char temp[PATH_MAX];
-						strncpy(temp, directory_paths[i], PATH_MAX - 1);
-						temp[PATH_MAX - 1] = '\0';
-						strncpy(directory_paths[i], directory_paths[j], PATH_MAX - 1);
-						directory_paths[i][PATH_MAX - 1] = '\0';
-						strncpy(directory_paths[j], temp, PATH_MAX - 1);
-						directory_paths[j][PATH_MAX - 1] = '\0';
+						snprintf(temp, PATH_MAX, "%s", directory_paths[i]);
+						snprintf(directory_paths[i], PATH_MAX, "%s", directory_paths[j]);
+						snprintf(directory_paths[j], PATH_MAX, "%s", temp);
 					}
 				}
 			}

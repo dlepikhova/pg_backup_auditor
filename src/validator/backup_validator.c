@@ -19,6 +19,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#define _POSIX_C_SOURCE 200809L
 
 #include "pg_backup_auditor.h"
 #include <stdio.h>
@@ -67,7 +68,7 @@ ValidationResult*
 validate_backup_metadata(BackupInfo *info)
 {
 	ValidationResult *result;
-	char msg[256];
+	char msg[PATH_MAX + 100];
 
 	if (info == NULL)
 		return NULL;

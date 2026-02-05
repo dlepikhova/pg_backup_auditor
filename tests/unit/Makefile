@@ -4,9 +4,17 @@
 CC = clang
 CFLAGS = -std=c11 -Wall -Wextra -Werror -g
 CFLAGS += -I../../include
+# Suppress warning from libcheck headers about GNU extensions
+CFLAGS += -Wno-gnu-zero-variadic-macro-arguments
+
+# Coverage support
+ifeq ($(COVERAGE),1)
+    CFLAGS += --coverage
+    LDFLAGS_COVERAGE = --coverage
+endif
 
 # Libraries
-LDFLAGS = -lcheck -lm -lpthread
+LDFLAGS = -lcheck -lm -lpthread $(LDFLAGS_COVERAGE)
 
 # Check if pkg-config is available for libcheck
 PKG_CONFIG := $(shell which pkg-config 2>/dev/null)
@@ -15,7 +23,7 @@ ifneq ($(PKG_CONFIG),)
     CHECK_LDFLAGS := $(shell pkg-config --libs check 2>/dev/null)
     ifneq ($(CHECK_CFLAGS),)
         CFLAGS += $(CHECK_CFLAGS)
-        LDFLAGS = $(CHECK_LDFLAGS)
+        LDFLAGS = $(CHECK_LDFLAGS) $(LDFLAGS_COVERAGE)
     endif
 endif
 
@@ -23,6 +31,7 @@ endif
 COMMON_SRCS = ../../src/common/string_utils.c \
               ../../src/common/logging.c \
               ../../src/common/file_utils.c \
+              ../../src/common/xlog.c \
               ../../src/adapters/adapter_registry.c \
               ../../src/adapters/pg_basebackup.c \
               ../../src/adapters/pg_probackup.c

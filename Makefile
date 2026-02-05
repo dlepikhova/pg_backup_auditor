@@ -103,15 +103,31 @@ test:
 	@echo "Running unit tests..."
 	@cd tests/unit && $(MAKE) run
 
+# Alias for CI compatibility
+test-unit: test
+
+# Code coverage (requires gcov/lcov)
+test-coverage:
+	@echo "Running tests with coverage..."
+	@cd tests/unit && $(MAKE) clean
+	@cd tests/unit && $(MAKE) COVERAGE=1 run
+	@echo "Generating coverage report..."
+	@mkdir -p coverage
+	@lcov --capture --directory tests/unit --output-file coverage/coverage.info || echo "Warning: lcov not found, skipping coverage report"
+	@lcov --remove coverage/coverage.info '/usr/*' --output-file coverage/coverage.info || true
+	@genhtml coverage/coverage.info --output-directory coverage || echo "Warning: genhtml not found, skipping HTML report"
+	@echo "Coverage report generated in coverage/index.html"
+
 # Clean tests
 test-clean:
 	@cd tests/unit && $(MAKE) clean
+	@rm -rf coverage
 
 # Include dependencies if they exist
 -include .depend
 
 # Phony targets
-.PHONY: all install uninstall clean distclean depend test test-clean
+.PHONY: all install uninstall clean distclean depend test test-unit test-coverage test-clean
 
 # Help
 help:

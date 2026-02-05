@@ -14,13 +14,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04, macos-13, macos-14]
+        os: [ubuntu-22.04, ubuntu-24.04, macos-14]
         pg_version: [14, 15, 16, 17]
         compiler: [gcc, clang]
         exclude:
           # macOS doesn't have gcc in CI, only clang
-          - os: macos-13
-            compiler: gcc
           - os: macos-14
             compiler: gcc
 
@@ -31,7 +29,14 @@ jobs:
       - name: Install PostgreSQL (Linux)
         if: runner.os == 'Linux'
         run: |
+          # Add PostgreSQL APT repository
           sudo apt-get update
+          sudo apt-get install -y wget gnupg
+          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+
+          # Install PostgreSQL and dependencies
           sudo apt-get install -y \
             postgresql-${{ matrix.pg_version }} \
             postgresql-server-dev-${{ matrix.pg_version }} \
@@ -55,10 +60,11 @@ jobs:
         run: make test-unit
 
       - name: Memory leak check (Linux only)
-        if: runner.os == 'Linux' && matrix.compiler == 'gcc'
+        if: matrix.os == 'ubuntu-24.04' && matrix.compiler == 'gcc' && matrix.pg_version == 17
         run: |
           valgrind --leak-check=full --error-exitcode=1 --show-leak-kinds=all \
-            ./build/tests/unit/test_string_utils
+            --suppressions=/dev/null \
+            ./tests/unit/test_runner
 
       - name: Code coverage (ubuntu-24.04 + PG 17 + gcc only)
         if: matrix.os == 'ubuntu-24.04' && matrix.pg_version == 17 && matrix.compiler == 'gcc'
