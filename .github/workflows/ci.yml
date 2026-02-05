@@ -1,0 +1,70 @@
+name: CI Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }} with PG ${{ matrix.pg_version }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04, macos-13, macos-14]
+        pg_version: [14, 15, 16, 17]
+        compiler: [gcc, clang]
+        exclude:
+          # macOS doesn't have gcc in CI, only clang
+          - os: macos-13
+            compiler: gcc
+          - os: macos-14
+            compiler: gcc
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            postgresql-${{ matrix.pg_version }} \
+            postgresql-server-dev-${{ matrix.pg_version }} \
+            check \
+            valgrind
+
+      - name: Install PostgreSQL (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install postgresql@${{ matrix.pg_version }} check
+          # Link pg_config to PATH
+          echo "$(brew --prefix postgresql@${{ matrix.pg_version }})/bin" >> $GITHUB_PATH
+
+      - name: Build
+        run: |
+          make clean
+          make CC=${{ matrix.compiler }}
+
+      - name: Run unit tests
+        run: make test-unit
+
+      - name: Memory leak check (Linux only)
+        if: runner.os == 'Linux' && matrix.compiler == 'gcc'
+        run: |
+          valgrind --leak-check=full --error-exitcode=1 --show-leak-kinds=all \
+            ./build/tests/unit/test_string_utils
+
+      - name: Code coverage (ubuntu-24.04 + PG 17 + gcc only)
+        if: matrix.os == 'ubuntu-24.04' && matrix.pg_version == 17 && matrix.compiler == 'gcc'
+        run: |
+          make clean
+          make test-coverage
+          bash <(curl -s https://codecov.io/bash) || echo "Codecov upload failed"
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
