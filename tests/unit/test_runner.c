@@ -29,6 +29,7 @@ extern Suite *adapter_registry_suite(void);
 extern Suite *pg_basebackup_suite(void);
 extern Suite *sorting_suite(void);
 extern Suite *xlog_suite(void);
+extern Suite *ini_parser_suite(void);
 
 int
 main(void)
@@ -44,6 +45,7 @@ main(void)
 	srunner_add_suite(sr, pg_basebackup_suite());
 	srunner_add_suite(sr, sorting_suite());
 	srunner_add_suite(sr, xlog_suite());
+	srunner_add_suite(sr, ini_parser_suite());
 
 	/* Run tests */
 	srunner_run_all(sr, CK_NORMAL);

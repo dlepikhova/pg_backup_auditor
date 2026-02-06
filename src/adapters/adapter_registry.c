@@ -29,6 +29,7 @@
 BackupAdapter *pg_backup_auditor_adapters[] = {
 	&pg_basebackup_adapter,
 	&pg_probackup_adapter,
+	&pgbackrest_adapter,
 	NULL  /* sentinel */
 };
 
@@ -84,6 +85,8 @@ backup_tool_to_string(BackupTool tool)
 			return "pg_basebackup";
 		case BACKUP_TOOL_PG_PROBACKUP:
 			return "pg_probackup";
+		case BACKUP_TOOL_PGBACKREST:
+			return "pgBackRest";
 		default:
 			return "unknown";
 	}

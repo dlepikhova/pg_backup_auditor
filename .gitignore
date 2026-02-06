@@ -42,6 +42,7 @@ tests/integration/__pycache__/
 *.pyc
 .coverage
 htmlcov/
+tests/unit/test_runner
 
 # Log files
 *.log

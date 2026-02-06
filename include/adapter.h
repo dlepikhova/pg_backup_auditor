@@ -50,6 +50,7 @@ extern BackupAdapter *pg_backup_auditor_adapters[];
 /* Concrete adapters */
 extern BackupAdapter pg_basebackup_adapter;
 extern BackupAdapter pg_probackup_adapter;
+extern BackupAdapter pgbackrest_adapter;
 
 /* Helper functions */
 BackupAdapter* detect_backup_type(const char *path);
