@@ -160,23 +160,117 @@ scan_backup_directory(const char *backup_dir, int max_depth)
 }
 
 /*
+ * Compare function for qsort - sort WAL segments
+ */
+static int
+compare_wal_segments(const void *a, const void *b)
+{
+	const WALSegmentName *seg_a = (const WALSegmentName *)a;
+	const WALSegmentName *seg_b = (const WALSegmentName *)b;
+
+	/* Sort by timeline first */
+	if (seg_a->timeline != seg_b->timeline)
+		return (seg_a->timeline < seg_b->timeline) ? -1 : 1;
+
+	/* Then by log_id */
+	if (seg_a->log_id != seg_b->log_id)
+		return (seg_a->log_id < seg_b->log_id) ? -1 : 1;
+
+	/* Finally by seg_id */
+	if (seg_a->seg_id != seg_b->seg_id)
+		return (seg_a->seg_id < seg_b->seg_id) ? -1 : 1;
+
+	return 0;
+}
+
+/*
  * Scan WAL archive directory
  */
 WALArchiveInfo*
 scan_wal_archive(const char *wal_archive_dir)
 {
-	/* TODO: Implement WAL archive scanning
-	 *
-	 * - List all files in directory
-	 * - Filter WAL segment files (24 hex chars)
-	 * - Parse filenames to extract timeline, log_id, seg_id
-	 * - Sort segments
-	 * - Return WALArchiveInfo structure
-	 */
+	DIR *dir;
+	struct dirent *entry;
+	WALArchiveInfo *info;
+	WALSegmentName *segments = NULL;
+	int segment_count = 0;
+	int segment_capacity = 1024;  /* Initial capacity */
+	WALSegmentName seg;
 
-	(void) wal_archive_dir;  /* unused for now */
+	if (wal_archive_dir == NULL)
+		return NULL;
 
-	return NULL;
+	/* Allocate WALArchiveInfo structure */
+	info = calloc(1, sizeof(WALArchiveInfo));
+	if (info == NULL)
+		return NULL;
+
+	strncpy(info->archive_path, wal_archive_dir, sizeof(info->archive_path) - 1);
+
+	/* Allocate initial array for segments */
+	segments = malloc(segment_capacity * sizeof(WALSegmentName));
+	if (segments == NULL)
+	{
+		free(info);
+		return NULL;
+	}
+
+	/* Open directory */
+	dir = opendir(wal_archive_dir);
+	if (dir == NULL)
+	{
+		log_warning("Cannot open WAL archive directory: %s", wal_archive_dir);
+		free(segments);
+		free(info);
+		return NULL;
+	}
+
+	log_debug("Scanning WAL archive: %s", wal_archive_dir);
+
+	/* Scan directory for WAL segment files */
+	while ((entry = readdir(dir)) != NULL)
+	{
+		/* Skip . and .. */
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+			continue;
+
+		/* Try to parse as WAL filename */
+		if (!parse_wal_filename(entry->d_name, &seg))
+			continue;  /* Not a WAL segment, skip */
+
+		/* Resize array if needed */
+		if (segment_count >= segment_capacity)
+		{
+			segment_capacity *= 2;
+			WALSegmentName *new_segments = realloc(segments,
+												   segment_capacity * sizeof(WALSegmentName));
+			if (new_segments == NULL)
+			{
+				log_warning("Out of memory while scanning WAL archive");
+				break;
+			}
+			segments = new_segments;
+		}
+
+		/* Add segment to array */
+		segments[segment_count++] = seg;
+	}
+
+	closedir(dir);
+
+	log_debug("Found %d WAL segments", segment_count);
+
+	/* Sort segments by timeline, log_id, seg_id */
+	if (segment_count > 0)
+	{
+		qsort(segments, segment_count, sizeof(WALSegmentName), compare_wal_segments);
+	}
+
+	/* Store results */
+	info->segments = segments;
+	info->segment_count = segment_count;
+
+	return info;
 }
 
 /*

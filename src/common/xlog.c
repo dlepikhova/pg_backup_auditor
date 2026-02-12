@@ -88,30 +88,9 @@ format_lsn(XLogRecPtr lsn, char *buf, size_t bufsize)
 }
 
 /*
- * Parse WAL filename
- * Returns true on success, false on error
- */
-bool
-parse_wal_filename(const char *filename, WALSegmentName *result)
-{
-	/* TODO: Implement WAL filename parsing
-	 *
-	 * Expected format: "000000010000000000000012" (24 hex chars)
-	 * - Timeline: first 8 chars
-	 * - Log ID: next 8 chars
-	 * - Seg ID: last 8 chars
-	 */
-
-	(void) filename;  /* unused for now */
-	(void) result;  /* unused for now */
-
-	return false;
-}
-
-/*
  * Check if string is valid hex
  */
-static bool __attribute__((unused))
+static bool
 is_hex_string(const char *str, int len)
 {
 	int i;
@@ -121,6 +100,68 @@ is_hex_string(const char *str, int len)
 		if (!isxdigit((unsigned char) str[i]))
 			return false;
 	}
+
+	return true;
+}
+
+/*
+ * Parse WAL filename
+ * Returns true on success, false on error
+ */
+bool
+parse_wal_filename(const char *filename, WALSegmentName *result)
+{
+	size_t len;
+	char timeline_str[9];
+	char log_id_str[9];
+	char seg_id_str[9];
+	unsigned long timeline, log_id, seg_id;
+	char *endptr;
+
+	if (filename == NULL || result == NULL)
+		return false;
+
+	/* WAL filename format: TTTTTTTTLLLLLLLLSSSSSSSS (24 hex chars)
+	 * where:
+	 *   TTTTTTTT = timeline ID (8 hex digits)
+	 *   LLLLLLLL = log file ID (8 hex digits)
+	 *   SSSSSSSS = segment ID (8 hex digits)
+	 */
+	len = strlen(filename);
+
+	/* Check if filename is exactly 24 characters */
+	if (len != 24)
+		return false;
+
+	/* Check if all characters are hex digits */
+	if (!is_hex_string(filename, 24))
+		return false;
+
+	/* Extract timeline (first 8 chars) */
+	memcpy(timeline_str, filename, 8);
+	timeline_str[8] = '\0';
+	timeline = strtoul(timeline_str, &endptr, 16);
+	if (*endptr != '\0')
+		return false;
+
+	/* Extract log ID (next 8 chars) */
+	memcpy(log_id_str, filename + 8, 8);
+	log_id_str[8] = '\0';
+	log_id = strtoul(log_id_str, &endptr, 16);
+	if (*endptr != '\0')
+		return false;
+
+	/* Extract segment ID (last 8 chars) */
+	memcpy(seg_id_str, filename + 16, 8);
+	seg_id_str[8] = '\0';
+	seg_id = strtoul(seg_id_str, &endptr, 16);
+	if (*endptr != '\0')
+		return false;
+
+	/* Store results */
+	result->timeline = (uint32_t)timeline;
+	result->log_id = (uint32_t)log_id;
+	result->seg_id = (uint32_t)seg_id;
 
 	return true;
 }

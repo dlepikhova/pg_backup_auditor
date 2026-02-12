@@ -168,6 +168,14 @@ parse_pgbackrest_manifest(BackupInfo *info, const char *manifest_path)
 		info->pg_version = major * 10000;
 	}
 
+	/* Parse backup size information */
+	value = ini_get_value(ini, "backup", "backup-size");
+	if (value != NULL)
+		info->data_bytes = (uint64_t)atoll(value);
+
+	/* Note: backup-repo-size is the compressed size in repository,
+	 * we use data_bytes for the uncompressed data size */
+
 	ini_free(ini);
 	return true;
 }
@@ -251,6 +259,14 @@ parse_pgbackrest_backup_info(const char *backup_info_path, const char *stanza_na
 		const char *lsn_stop = get_json_value(json_value, "backup-lsn-stop");
 		if (lsn_stop != NULL)
 			parse_lsn(lsn_stop, &info->stop_lsn);
+
+		/* Extract size information */
+		const char *backup_size = get_json_value(json_value, "backup-size");
+		if (backup_size != NULL)
+			info->data_bytes = (uint64_t)atoll(backup_size);
+
+		/* Note: backup-repo-size is the compressed size in repository,
+		 * we use data_bytes for the uncompressed data size */
 
 		/* Build backup path */
 		backup_dir = strrchr(backup_info_path, '/');
