@@ -37,7 +37,9 @@ COMMON_SRCS = ../../src/common/string_utils.c \
               ../../src/adapters/adapter_registry.c \
               ../../src/adapters/pg_basebackup.c \
               ../../src/adapters/pg_probackup.c \
-              ../../src/adapters/pgbackrest.c
+              ../../src/adapters/pgbackrest.c \
+              ../../src/validator/backup_validator.c \
+              ../../src/validator/wal_validator.c
 
 # Test source files
 TEST_SRCS = test_runner.c \
@@ -47,7 +49,8 @@ TEST_SRCS = test_runner.c \
             test_pgbackrest.c \
             test_sorting.c \
             test_xlog.c \
-            test_ini_parser.c
+            test_ini_parser.c \
+            test_wal_validator.c
 
 # Object files
 COMMON_OBJS = $(COMMON_SRCS:.c=.o)

@@ -12,6 +12,8 @@ test_common_sources = files(
   '../../src/adapters/pg_basebackup.c',
   '../../src/adapters/pg_probackup.c',
   '../../src/adapters/pgbackrest.c',
+  '../../src/validator/backup_validator.c',
+  '../../src/validator/wal_validator.c',
 )
 
 # Test sources
@@ -24,6 +26,7 @@ test_sources = files(
   'test_sorting.c',
   'test_xlog.c',
   'test_ini_parser.c',
+  'test_wal_validator.c',
 )
 
 # Test-specific compiler flags (disable Werror for libcheck compatibility)

@@ -88,6 +88,42 @@ format_lsn(XLogRecPtr lsn, char *buf, size_t bufsize)
 }
 
 /*
+ * Convert LSN to WAL segment name
+ *
+ * WAL segment size is 16MB (0x1000000) by default.
+ * LSN is divided by segment size to get segment number.
+ * Segment number is split into log_id (upper 32 bits) and seg_id (lower 32 bits).
+ */
+void
+lsn_to_seg(XLogRecPtr lsn, uint32_t timeline, WALSegmentName *seg, uint32_t wal_segment_size)
+{
+	uint64_t segment_number;
+
+	if (seg == NULL)
+		return;
+
+	/* Default WAL segment size is 16MB if not specified */
+	if (wal_segment_size == 0)
+		wal_segment_size = 0x1000000;  /* 16MB */
+
+	/* Calculate segment number: LSN / WAL_SEGMENT_SIZE */
+	segment_number = lsn / wal_segment_size;
+
+	/* Split into log_id and seg_id
+	 * In PostgreSQL 11+: segment number is 64-bit
+	 *   Upper 32 bits = log_id (0xFFFFFFFF00000000)
+	 *   Lower 8 bits of upper half + upper 24 bits of lower half = seg_id
+	 *
+	 * For simplicity, we use the traditional approach:
+	 *   log_id = segment_number / 0x100000000
+	 *   seg_id = segment_number % 0x100000000
+	 */
+	seg->timeline = timeline;
+	seg->log_id = (uint32_t)(segment_number / 0x100000000ULL);
+	seg->seg_id = (uint32_t)(segment_number % 0x100000000ULL);
+}
+
+/*
  * Check if string is valid hex
  */
 static bool

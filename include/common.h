@@ -32,6 +32,7 @@
 bool parse_lsn(const char *str, XLogRecPtr *lsn);
 int lsn_compare(XLogRecPtr lsn1, XLogRecPtr lsn2);
 void format_lsn(XLogRecPtr lsn, char *buf, size_t bufsize);
+void lsn_to_seg(XLogRecPtr lsn, uint32_t timeline, WALSegmentName *seg, uint32_t wal_segment_size);
 bool parse_wal_filename(const char *filename, WALSegmentName *result);
 
 /* logging.c - Logging functions */

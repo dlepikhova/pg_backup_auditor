@@ -31,6 +31,7 @@ extern Suite *pgbackrest_suite(void);
 extern Suite *sorting_suite(void);
 extern Suite *xlog_suite(void);
 extern Suite *ini_parser_suite(void);
+extern Suite *wal_validator_suite(void);
 
 int
 main(void)
@@ -48,6 +49,7 @@ main(void)
 	srunner_add_suite(sr, sorting_suite());
 	srunner_add_suite(sr, xlog_suite());
 	srunner_add_suite(sr, ini_parser_suite());
+	srunner_add_suite(sr, wal_validator_suite());
 
 	/* Run tests */
 	srunner_run_all(sr, CK_NORMAL);
