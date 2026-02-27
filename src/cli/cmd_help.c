@@ -103,10 +103,10 @@ print_check_usage(void)
 	printf("      --skip-wal           Skip all WAL checking\n");
 	printf("  -h, --help               Show this help message\n\n");
 
-	printf("VALIDATION LEVELS:\n");
+	printf("VALIDATION LEVELS (cumulative — each level includes all checks from previous):\n");
 	printf("  basic      - Level 1: File structure + chain connectivity + WAL presence\n");
 	printf("  standard   - Level 2: Level 1 + metadata validation (default)\n");
-	printf("  checksums  - Level 3: Level 2 + checksums + WAL continuity\n");
+	printf("  checksums  - Level 3: Level 2 + WAL availability + WAL header validation\n");
 	printf("  full       - Level 4: Level 3 + comprehensive checks (pg_verifybackup)\n\n");
 
 	printf("CHECKS BY LEVEL:\n");
@@ -121,18 +121,21 @@ print_check_usage(void)
 	printf("    - Timestamp consistency: start_time < end_time\n");
 	printf("    - Timeline and version presence\n\n");
 	printf("  Level 3 (checksums):\n");
-	printf("    - Checksum validation: verify file checksums\n");
-	printf("    - WAL continuity: complete WAL segment chain from start_lsn to stop_lsn\n\n");
+	printf("    - WAL availability: all segments in [start_lsn, stop_lsn] range exist\n");
+	printf("    - WAL header validation: reads XLogLongPageHeaderData from each segment\n");
+	printf("        magic (non-zero, XLP_LONG_HEADER flag set)\n");
+	printf("        timeline matches backup\n");
+	printf("        page address matches expected segment start\n");
+	printf("        segment size is a valid power of two (1 MB - 1 GB)\n\n");
 	printf("  Level 4 (full):\n");
 	printf("    - pg_verifybackup: if available for pg_basebackup\n");
 	printf("    - All comprehensive checks\n\n");
 
 	printf("WAL CHECKING:\n");
-	printf("  WAL checks are performed automatically if backup contains WAL metadata:\n");
-	printf("    - Level 1: Checks for WAL files presence in backup directory\n");
-	printf("    - Level 3: Validates WAL continuity using LSN range\n");
-	printf("  Use --skip-wal to disable automatic WAL checks\n");
-	printf("  Use --wal-archive to specify external WAL archive location\n\n");
+	printf("  WAL checks require backup LSN metadata (start_lsn/stop_lsn).\n");
+	printf("  For pg_probackup: WAL archive path is auto-detected from the catalog.\n");
+	printf("  For other tools: use --wal-archive to specify the archive location.\n");
+	printf("  Use --skip-wal to disable all WAL checks.\n\n");
 
 	printf("EXIT CODES:\n");
 	printf("  0 - All checks passed successfully\n");

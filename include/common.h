@@ -34,6 +34,7 @@ int lsn_compare(XLogRecPtr lsn1, XLogRecPtr lsn2);
 void format_lsn(XLogRecPtr lsn, char *buf, size_t bufsize);
 void lsn_to_seg(XLogRecPtr lsn, uint32_t timeline, WALSegmentName *seg, uint32_t wal_segment_size);
 bool parse_wal_filename(const char *filename, WALSegmentName *result);
+void format_wal_filename(const WALSegmentName *seg, char *buf, size_t bufsize);
 
 /* logging.c - Logging functions */
 typedef enum {
@@ -92,5 +93,6 @@ void free_validation_result(ValidationResult *result);
 /* validator/wal_validator.c - WAL validation */
 ValidationResult* check_wal_continuity(WALArchiveInfo *wal_info);
 ValidationResult* check_wal_availability(BackupInfo *backup, WALArchiveInfo *wal_info);
+ValidationResult* check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info);
 
 #endif /* COMMON_H */

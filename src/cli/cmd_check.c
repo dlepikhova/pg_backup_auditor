@@ -323,6 +323,30 @@ cmd_check_main(int argc, char **argv)
 				printf("            Use --wal-archive=PATH to specify WAL archive location\n");
 				total_warnings++;
 			}
+
+			/* WAL header validation */
+			if (!opts.skip_wal && wal_info != NULL &&
+				current->start_lsn > 0 && current->stop_lsn > 0)
+			{
+				ValidationResult *hdr_result = check_wal_headers(current, wal_info);
+				if (hdr_result != NULL)
+				{
+					if (hdr_result->error_count > 0)
+					{
+						printf("  %s[ERROR]%s WAL header validation failed:\n",
+							   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
+						for (int i = 0; i < hdr_result->error_count; i++)
+							printf("          %s\n", hdr_result->errors[i]);
+					}
+					else
+					{
+						printf("  %s[OK]%s WAL headers: all checked segments have valid headers\n",
+							   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
+					}
+					total_errors += hdr_result->error_count;
+					free_validation_result(hdr_result);
+				}
+			}
 		}
 
 		/* Level 4: Full validation (pg_verifybackup, etc.) */

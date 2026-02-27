@@ -13,7 +13,9 @@ Cross-platform PostgreSQL backup auditor - unified analysis and validation tool 
 - pg_probackup: FULL, PAGE, DELTA, PTRACK backup types, all statuses
 - Backup listing with filtering, sorting, grouping by directory
 - Detailed backup info: timing, storage, PostgreSQL metadata (LSN, timeline, WAL)
-- Backup validation with 4 levels (basic → standard → checksums → full)
+- Backup validation with 4 levels (basic → standard → checksums → full):
+  - Level 2 (standard): metadata consistency — timestamps, LSN range, timeline, version
+  - Level 3 (checksums): WAL availability (all required segments present) + WAL header validation (magic, timeline, page address, segment size)
 - Color output with `--no-color` option
 
 ## Quick Start
@@ -113,14 +115,24 @@ pg_backup_auditor check --backup-dir=PATH [OPTIONS]
 
 Options:
 - `--backup-dir=PATH, -B PATH` - Backup directory (required)
-- `--level=LEVEL` - Validation level (default: standard)
+- `--backup-id=ID, -i ID` - Validate only the specified backup
+- `--wal-archive=PATH, -w PATH` - External WAL archive directory (optional, needed for level 3)
+- `--level=LEVEL, -l LEVEL` - Validation level (default: standard)
+- `--skip-wal` - Skip all WAL checks
 - `--help, -h` - Show help
 
-**Validation levels** (cumulative — each level includes all checks from the previous):
-- `basic` - Backup status from metadata only
-- `standard` - Metadata checks (backup_id, timestamps, LSN consistency)
-- `checksums` - Checksum verification (if available in backup)
-- `full` - All checks including WAL continuity
+**Validation levels** (cumulative — each level includes all checks from previous levels):
+
+| Level | Name | Checks |
+|-------|------|--------|
+| 1 | `basic` | File structure, backup chain connectivity, WAL presence in backup |
+| 2 | `standard` | Metadata: timestamps, LSN range, timeline, PostgreSQL version *(default)* |
+| 3 | `checksums` | WAL availability (all required segments present) + WAL header validation |
+| 4 | `full` | All checks + pg_verifybackup |
+
+**Level 3 WAL checks** (require `--wal-archive` or auto-detected for pg_probackup):
+- WAL availability: verifies every segment in the [start_lsn, stop_lsn] range exists
+- WAL header validation: reads `XLogLongPageHeaderData` from each segment and checks magic, `XLP_LONG_HEADER` flag, timeline, page address, and segment size
 
 **Output**: per-backup results with [OK] / [WARNING] / [ERROR] labels, summary with Total / Validated / Skipped counts, and overall result (OK / WARNING / FAILED).
 
@@ -187,18 +199,12 @@ make run
 
 ### Test Coverage
 
-Current test coverage: **~68% overall**
+**Test suite**: 88 unit and integration tests (100% passing)
 
-- **Adapters**: 85% (pg_basebackup), 67% (pg_probackup)
-- **Common utilities**: 80% (string_utils, logging, file_utils)
-- **CLI commands**: 60% (list, info, check)
-- **Scanners**: 70% (fs_scanner)
-
-**Test suite**:
-- 45 unit tests (all passing)
-- Integration tests via `test_real_backups.sh`
-- Tests for extended metadata extraction (9 tests)
-- Tests for backup detection, scanning, and parsing
+- **WAL validator**: availability, header validation (positive + 3 negative scenarios)
+- **Adapters**: pg_basebackup, pg_probackup (scan, WAL path detection, end-to-end)
+- **Common utilities**: string_utils, xlog (LSN/segment parsing and formatting), INI parser
+- **Integration tests** with real pg_probackup backup catalog (skipped if not present)
 
 ## Development
 

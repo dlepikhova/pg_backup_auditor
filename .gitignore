@@ -57,6 +57,7 @@ tests/unit/test_runner
 
 # Internal development docs (not for public repo)
 /PROGRESS.md
+/BUGS.md
 /description.md
 /PROJECT_STRUCTURE.md
 /TESTING.md

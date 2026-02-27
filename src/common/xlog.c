@@ -124,6 +124,17 @@ lsn_to_seg(XLogRecPtr lsn, uint32_t timeline, WALSegmentName *seg, uint32_t wal_
 }
 
 /*
+ * Format WAL segment name from segment info
+ * Produces a 24-character hex string: TTTTTTTTLLLLLLLLSSSSSSSS
+ */
+void
+format_wal_filename(const WALSegmentName *seg, char *buf, size_t bufsize)
+{
+	snprintf(buf, bufsize, "%08X%08X%08X",
+			 seg->timeline, seg->log_id, seg->seg_id);
+}
+
+/*
  * Check if string is valid hex
  */
 static bool
