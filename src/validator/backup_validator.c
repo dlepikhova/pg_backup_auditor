@@ -105,9 +105,9 @@ validate_backup_metadata(BackupInfo *info)
 	if (info->end_time == 0 && info->status == BACKUP_STATUS_OK)
 		add_warning(result, "Missing end_time for completed backup");
 
-	if (info->start_time > 0 && info->end_time > 0 && info->start_time >= info->end_time)
+	if (info->start_time > 0 && info->end_time > 0 && info->start_time > info->end_time)
 	{
-		snprintf(msg, sizeof(msg), "Invalid timestamps: start_time (%ld) >= end_time (%ld)",
+		snprintf(msg, sizeof(msg), "Invalid timestamps: start_time (%ld) > end_time (%ld)",
 				 (long)info->start_time, (long)info->end_time);
 		add_error(result, msg);
 	}

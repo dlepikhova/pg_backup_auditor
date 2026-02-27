@@ -168,6 +168,7 @@ cmd_check_main(int argc, char **argv)
 {
 	CheckOptions opts;
 	BackupInfo *backups = NULL;
+	WALArchiveInfo *wal_info = NULL;
 	int ret;
 	int total_errors = 0;
 	int total_warnings = 0;
@@ -198,6 +199,17 @@ cmd_check_main(int argc, char **argv)
 	{
 		fprintf(stderr, "Error: No backups found in: %s\n", opts.backup_dir);
 		return EXIT_NO_BACKUPS_FOUND;
+	}
+
+	/* Scan WAL archive if provided and WAL checks are not skipped */
+	if (!opts.skip_wal && opts.wal_archive != NULL)
+	{
+		log_info("Scanning WAL archive: %s", opts.wal_archive);
+		wal_info = scan_wal_archive(opts.wal_archive);
+		if (wal_info == NULL)
+			log_warning("Failed to scan WAL archive: %s", opts.wal_archive);
+		else
+			log_info("Found %d WAL segments in archive", wal_info->segment_count);
 	}
 
 	/* Validate backups */
@@ -274,17 +286,42 @@ cmd_check_main(int argc, char **argv)
 			}
 		}
 
-		/* Level 3: Checksums + WAL continuity */
+		/* Level 3: Checksums + WAL availability */
 		if (opts.level >= VALIDATION_LEVEL_CHECKSUMS)
 		{
 			/* TODO: Add checksum validation */
 			log_debug("Checksum validation not yet implemented");
 
-			/* WAL continuity check (Level 3) - if backup has LSN range */
-			if (!opts.skip_wal && current->start_lsn > 0 && current->stop_lsn > 0)
+			/* WAL availability check: verify all required segments exist */
+			if (!opts.skip_wal && wal_info != NULL &&
+				current->start_lsn > 0 && current->stop_lsn > 0)
 			{
-				/* TODO: Check WAL continuity from start_lsn to stop_lsn */
-				log_debug("WAL continuity check not yet implemented");
+				ValidationResult *wal_result = check_wal_availability(current, wal_info);
+				if (wal_result != NULL)
+				{
+					if (wal_result->error_count > 0)
+					{
+						printf("  %s[ERROR]%s WAL availability check failed:\n",
+							   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
+						for (int i = 0; i < wal_result->error_count; i++)
+							printf("          %s\n", wal_result->errors[i]);
+					}
+					else
+					{
+						printf("  %s[OK]%s WAL availability: all required segments present\n",
+							   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
+					}
+					total_errors += wal_result->error_count;
+					free_validation_result(wal_result);
+				}
+			}
+			else if (!opts.skip_wal && wal_info == NULL &&
+					 current->start_lsn > 0 && current->stop_lsn > 0)
+			{
+				printf("  %s[WARNING]%s WAL availability not checked: no WAL archive provided\n",
+					   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "");
+				printf("            Use --wal-archive=PATH to specify WAL archive location\n");
+				total_warnings++;
 			}
 		}
 
@@ -314,6 +351,8 @@ cmd_check_main(int argc, char **argv)
 
 	/* Cleanup */
 	free_backup_list(backups);
+	if (wal_info != NULL)
+		free_wal_archive_info(wal_info);
 
 	/* Return appropriate exit code */
 	if (total_errors > 0)

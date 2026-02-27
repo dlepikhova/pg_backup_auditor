@@ -33,6 +33,7 @@
 static bool pg_basebackup_detect(const char *path);
 static BackupInfo* pg_basebackup_scan(const char *backup_root);
 static int pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info);
+static char* pg_basebackup_get_wal_archive_path(const char *backup_path, const char *instance_name);
 static ValidationResult* pg_basebackup_validate(BackupInfo *info, WALArchiveInfo *wal);
 static void pg_basebackup_cleanup(BackupInfo *info);
 
@@ -47,6 +48,7 @@ BackupAdapter pg_basebackup_adapter = {
 	.detect = pg_basebackup_detect,
 	.scan = pg_basebackup_scan,
 	.read_metadata = pg_basebackup_read_metadata,
+	.get_wal_archive_path = pg_basebackup_get_wal_archive_path,
 	.validate = pg_basebackup_validate,
 	.cleanup = pg_basebackup_cleanup
 };
@@ -613,6 +615,43 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 	 */
 
 	return STATUS_OK;
+}
+
+/*
+ * Get WAL archive path for pg_basebackup backup
+ *
+ * pg_basebackup can store WAL in two ways:
+ * 1. Included in backup (--wal-method=fetch or stream): pg_wal/ inside backup_path
+ * 2. External WAL archive: Requires user configuration (not supported yet)
+ *
+ * For now, we check if pg_wal exists inside the backup directory.
+ */
+static char*
+pg_basebackup_get_wal_archive_path(const char *backup_path, const char *instance_name)
+{
+	char *wal_path;
+	char pg_wal_path[PATH_MAX];
+
+	(void) instance_name;  /* Not used for pg_basebackup */
+
+	if (backup_path == NULL)
+		return NULL;
+
+	/* Check for pg_wal directory inside backup */
+	path_join(pg_wal_path, sizeof(pg_wal_path), backup_path, "pg_wal");
+
+	if (is_directory(pg_wal_path))
+	{
+		wal_path = strdup(pg_wal_path);
+		log_debug("pg_basebackup WAL path: %s", wal_path);
+		return wal_path;
+	}
+
+	/* TODO: Support external WAL archive location
+	 * This would require reading PostgreSQL configuration or user-provided path */
+	log_debug("No pg_wal directory found in pg_basebackup backup: %s", backup_path);
+	log_debug("External WAL archive support not yet implemented");
+	return NULL;
 }
 
 /*

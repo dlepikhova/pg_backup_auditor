@@ -394,10 +394,45 @@ pgbackrest_scan(const char *path)
 	return scan_pgbackrest_backups(path);
 }
 
+/* Stub implementations for unimplemented adapter methods */
+static int pgbackrest_read_metadata_stub(const char *backup_path, BackupInfo *info)
+{
+	(void) backup_path;
+	(void) info;
+	return -1;  /* Not implemented */
+}
+
+static char* pgbackrest_get_wal_archive_path_stub(const char *backup_path, const char *instance_name)
+{
+	(void) backup_path;
+	(void) instance_name;
+	log_debug("pgBackRest WAL archive path detection not yet implemented");
+	/* TODO: Implement WAL path detection for pgBackRest
+	 * WAL is stored in: <repo>/archive/<stanza>/<pg-version>/ */
+	return NULL;
+}
+
+static ValidationResult* pgbackrest_validate_stub(BackupInfo *info, WALArchiveInfo *wal)
+{
+	(void) info;
+	(void) wal;
+	return NULL;  /* Not implemented */
+}
+
+static void pgbackrest_cleanup_stub(BackupInfo *info)
+{
+	(void) info;
+	/* Nothing to clean up yet */
+}
+
 BackupAdapter pgbackrest_adapter = {
 	.name = "pgBackRest",
 	.detect = pgbackrest_detect,
-	.scan = pgbackrest_scan
+	.scan = pgbackrest_scan,
+	.read_metadata = pgbackrest_read_metadata_stub,
+	.get_wal_archive_path = pgbackrest_get_wal_archive_path_stub,
+	.validate = pgbackrest_validate_stub,
+	.cleanup = pgbackrest_cleanup_stub
 };
 
 BackupAdapter*

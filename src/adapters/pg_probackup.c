@@ -30,6 +30,7 @@
 static bool pg_probackup_detect(const char *path);
 static BackupInfo* pg_probackup_scan(const char *backup_root);
 static int pg_probackup_read_metadata(const char *backup_path, BackupInfo *info);
+static char* pg_probackup_get_wal_archive_path(const char *backup_path, const char *instance_name);
 static ValidationResult* pg_probackup_validate(BackupInfo *info, WALArchiveInfo *wal);
 static void pg_probackup_cleanup(BackupInfo *info);
 
@@ -39,6 +40,7 @@ BackupAdapter pg_probackup_adapter = {
 	.detect = pg_probackup_detect,
 	.scan = pg_probackup_scan,
 	.read_metadata = pg_probackup_read_metadata,
+	.get_wal_archive_path = pg_probackup_get_wal_archive_path,
 	.validate = pg_probackup_validate,
 	.cleanup = pg_probackup_cleanup
 };
@@ -436,6 +438,102 @@ pg_probackup_read_metadata(const char *backup_path, BackupInfo *info)
 			  info->backup_id, info->type, info->status);
 
 	return STATUS_OK;
+}
+
+/*
+ * Get WAL archive path for pg_probackup backup
+ *
+ * pg_probackup can store WAL in two places:
+ * 1. Default: <backup_catalog>/wal/<instance_name>/
+ * 2. Custom: User-specified directory (configured in pg_probackup.conf or via --archive-host)
+ *
+ * The backup_path typically looks like: <backup_catalog>/backups/<instance_name>/<backup_id>
+ *
+ * TODO: Read custom WAL location from pg_probackup.conf if it exists
+ * For now, we use the default location.
+ */
+static char*
+pg_probackup_get_wal_archive_path(const char *backup_path, const char *instance_name)
+{
+	char *wal_path;
+	char catalog_path[PATH_MAX];
+	char config_path[PATH_MAX];
+	const char *ptr;
+	int slash_count;
+
+	if (backup_path == NULL)
+		return NULL;
+
+	/* If instance_name is provided, use it to build the path */
+	if (instance_name != NULL && instance_name[0] != '\0')
+	{
+		/* Navigate from backup_path to catalog root
+		 * backup_path: /path/to/catalog/backups/instance_name/backup_id
+		 * We need:      /path/to/catalog/wal/instance_name/ */
+
+		/* Find catalog root by going up from backup_path
+		 * Remove: /backups/instance_name/backup_id */
+		slash_count = 0;
+		ptr = backup_path + strlen(backup_path) - 1;
+
+		/* Skip trailing slashes */
+		while (ptr > backup_path && *ptr == '/')
+			ptr--;
+
+		/* Go up 3 directory levels */
+		while (ptr > backup_path && slash_count < 3)
+		{
+			if (*ptr == '/')
+				slash_count++;
+			ptr--;
+		}
+
+		if (slash_count == 3 && ptr > backup_path)
+		{
+			/* Copy catalog path */
+			size_t len = (ptr + 2) - backup_path;  /* +2 to include the slash */
+			if (len >= sizeof(catalog_path))
+				len = sizeof(catalog_path) - 1;
+			memcpy(catalog_path, backup_path, len);
+			catalog_path[len] = '\0';
+
+			/* Check if pg_probackup.conf exists and read custom WAL path
+			 * TODO: Implement pg_probackup.conf parsing
+			 * Config location: <catalog_path>/pg_probackup.conf */
+			path_join(config_path, sizeof(config_path), catalog_path, "pg_probackup.conf");
+			if (file_exists(config_path))
+			{
+				log_debug("Found pg_probackup.conf, but custom WAL path parsing not yet implemented");
+				/* Future: parse config and check for archive-host or custom wal directory */
+			}
+
+			/* Use default WAL location */
+			wal_path = malloc(PATH_MAX);
+			if (wal_path == NULL)
+				return NULL;
+
+			path_join(wal_path, PATH_MAX, catalog_path, "wal");
+			path_join(wal_path, PATH_MAX, wal_path, instance_name);
+
+			/* Verify the path exists */
+			if (is_directory(wal_path))
+			{
+				log_debug("pg_probackup WAL path: %s", wal_path);
+				return wal_path;
+			}
+			else
+			{
+				log_warning("WAL directory not found: %s", wal_path);
+				free(wal_path);
+				return NULL;
+			}
+		}
+	}
+
+	/* Fallback: could not determine WAL path */
+	log_warning("Could not determine WAL archive path for pg_probackup backup: %s", backup_path);
+	log_warning("Instance name: %s", instance_name ? instance_name : "(null)");
+	return NULL;
 }
 
 /*

@@ -37,6 +37,9 @@ typedef struct BackupAdapter {
 	BackupInfo* (*scan)(const char *backup_root);
 	int (*read_metadata)(const char *backup_path, BackupInfo *info);
 
+	/* Get WAL archive path for this backup */
+	char* (*get_wal_archive_path)(const char *backup_path, const char *instance_name);
+
 	/* Validate backup */
 	ValidationResult* (*validate)(BackupInfo *info, WALArchiveInfo *wal);
 
