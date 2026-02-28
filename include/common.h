@@ -77,6 +77,7 @@ off_t get_file_size(const char *path);
 uint64_t get_directory_size(const char *path);
 void path_join(char *dest, size_t destsize, const char *path1, const char *path2);
 char *read_file_contents(const char *path);
+bool compute_file_crc32c(const char *path, uint32_t *crc_out);
 
 /* scanner/fs_scanner.c - Directory scanning */
 BackupInfo* scan_backup_directory(const char *backup_dir, int max_depth);
@@ -86,6 +87,7 @@ void free_wal_archive_info(WALArchiveInfo *info);
 
 /* validator/backup_validator.c - Backup validation */
 ValidationResult* validate_backup_metadata(BackupInfo *info);
+ValidationResult* check_backup_checksums(BackupInfo *backup);
 ValidationResult* validate_backup_chain(BackupInfo *backup, BackupInfo *all_backups);
 ValidationResult* check_retention_policy(BackupInfo *backups, int retention_days, int retention_weekly);
 void free_validation_result(ValidationResult *result);

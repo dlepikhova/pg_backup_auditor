@@ -322,8 +322,27 @@ cmd_check_main(int argc, char **argv)
 		/* Level 3: Checksums + WAL availability */
 		if (opts.level >= VALIDATION_LEVEL_CHECKSUMS)
 		{
-			/* TODO: Add checksum validation */
-			log_debug("Checksum validation not yet implemented");
+			/* File-level checksum validation */
+			ValidationResult *chk_result = check_backup_checksums(current);
+			if (chk_result != NULL)
+			{
+				if (chk_result->error_count > 0)
+				{
+					printf("  %s[ERROR]%s Checksum validation failed (%d file%s):\n",
+						   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "",
+						   chk_result->error_count,
+						   chk_result->error_count == 1 ? "" : "s");
+					for (int i = 0; i < chk_result->error_count; i++)
+						printf("          %s\n", chk_result->errors[i]);
+				}
+				else
+				{
+					printf("  %s[OK]%s File checksums: all verified\n",
+						   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
+				}
+				total_errors += chk_result->error_count;
+				free_validation_result(chk_result);
+			}
 
 			/* WAL checks for backups with LSN info */
 			if (!opts.skip_wal && current->start_lsn > 0 && current->stop_lsn > 0)
