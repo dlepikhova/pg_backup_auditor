@@ -23,6 +23,7 @@
 #include "pg_backup_auditor.h"
 #include "cmd_help.h"
 #include "arg_parser.h"
+#include "adapter.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -202,7 +203,8 @@ cmd_check_main(int argc, char **argv)
 	}
 
 	/* Scan WAL archive if provided and WAL checks are not skipped */
-	if (!opts.skip_wal && opts.wal_archive != NULL)
+	if (!opts.skip_wal && opts.wal_archive != NULL &&
+		opts.level >= VALIDATION_LEVEL_CHECKSUMS)
 	{
 		log_info("Scanning WAL archive: %s", opts.wal_archive);
 		wal_info = scan_wal_archive(opts.wal_archive);
@@ -210,6 +212,37 @@ cmd_check_main(int argc, char **argv)
 			log_warning("Failed to scan WAL archive: %s", opts.wal_archive);
 		else
 			log_info("Found %d WAL segments in archive", wal_info->segment_count);
+	}
+
+	/* Auto-detect WAL archive for archive-mode backups (stream=false)
+	 * if --wal-archive was not explicitly provided */
+	if (!opts.skip_wal && wal_info == NULL &&
+		opts.level >= VALIDATION_LEVEL_CHECKSUMS)
+	{
+		BackupInfo *scan = backups;
+		while (scan != NULL)
+		{
+			if (!scan->wal_stream && scan->start_lsn > 0)
+			{
+				BackupAdapter *adapter = get_adapter_for_tool(scan->tool);
+				if (adapter != NULL && adapter->get_wal_archive_path != NULL)
+				{
+					char *wal_path = adapter->get_wal_archive_path(
+						scan->backup_path, scan->instance_name);
+					if (wal_path != NULL)
+					{
+						log_info("Auto-detected WAL archive: %s", wal_path);
+						wal_info = scan_wal_archive(wal_path);
+						free(wal_path);
+						if (wal_info != NULL)
+							log_info("Found %d WAL segments in archive",
+									 wal_info->segment_count);
+						break;
+					}
+				}
+			}
+			scan = scan->next;
+		}
 	}
 
 	/* Validate backups */
@@ -292,60 +325,88 @@ cmd_check_main(int argc, char **argv)
 			/* TODO: Add checksum validation */
 			log_debug("Checksum validation not yet implemented");
 
-			/* WAL availability check: verify all required segments exist */
-			if (!opts.skip_wal && wal_info != NULL &&
-				current->start_lsn > 0 && current->stop_lsn > 0)
+			/* WAL checks for backups with LSN info */
+			if (!opts.skip_wal && current->start_lsn > 0 && current->stop_lsn > 0)
 			{
-				ValidationResult *wal_result = check_wal_availability(current, wal_info);
-				if (wal_result != NULL)
-				{
-					if (wal_result->error_count > 0)
-					{
-						printf("  %s[ERROR]%s WAL availability check failed:\n",
-							   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
-						for (int i = 0; i < wal_result->error_count; i++)
-							printf("          %s\n", wal_result->errors[i]);
-					}
-					else
-					{
-						printf("  %s[OK]%s WAL availability: all required segments present\n",
-							   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
-					}
-					total_errors += wal_result->error_count;
-					free_validation_result(wal_result);
-				}
-			}
-			else if (!opts.skip_wal && wal_info == NULL &&
-					 current->start_lsn > 0 && current->stop_lsn > 0)
-			{
-				printf("  %s[WARNING]%s WAL availability not checked: no WAL archive provided\n",
-					   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "");
-				printf("            Use --wal-archive=PATH to specify WAL archive location\n");
-				total_warnings++;
-			}
+				/* Determine whether we have a WAL archive to check against:
+				 * - archive mode: use wal_info (explicit or auto-detected)
+				 * - stream mode:  use wal_info only if explicitly provided via --wal-archive */
+				WALArchiveInfo *effective_wal = NULL;
+				if (!current->wal_stream)
+					effective_wal = wal_info;          /* explicit or auto-detected */
+				else if (opts.wal_archive != NULL)
+					effective_wal = wal_info;          /* explicit only for stream */
 
-			/* WAL header validation */
-			if (!opts.skip_wal && wal_info != NULL &&
-				current->start_lsn > 0 && current->stop_lsn > 0)
-			{
-				ValidationResult *hdr_result = check_wal_headers(current, wal_info);
-				if (hdr_result != NULL)
+				if (effective_wal != NULL)
 				{
-					if (hdr_result->error_count > 0)
+					/* WAL availability check */
+					ValidationResult *wal_result = check_wal_availability(current, effective_wal);
+					if (wal_result != NULL)
 					{
-						printf("  %s[ERROR]%s WAL header validation failed:\n",
-							   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
-						for (int i = 0; i < hdr_result->error_count; i++)
-							printf("          %s\n", hdr_result->errors[i]);
+						if (wal_result->error_count > 0)
+						{
+							printf("  %s[ERROR]%s WAL availability check failed:\n",
+								   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
+							for (int i = 0; i < wal_result->error_count; i++)
+								printf("          %s\n", wal_result->errors[i]);
+						}
+						else
+						{
+							printf("  %s[OK]%s WAL availability: all required segments present\n",
+								   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
+						}
+						total_errors += wal_result->error_count;
+						free_validation_result(wal_result);
 					}
-					else
+
+					/* WAL header validation */
+					ValidationResult *hdr_result = check_wal_headers(current, effective_wal);
+					if (hdr_result != NULL)
 					{
-						printf("  %s[OK]%s WAL headers: all checked segments have valid headers\n",
-							   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
+						if (hdr_result->error_count > 0)
+						{
+							printf("  %s[ERROR]%s WAL header validation failed:\n",
+								   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
+							for (int i = 0; i < hdr_result->error_count; i++)
+								printf("          %s\n", hdr_result->errors[i]);
+						}
+						else
+						{
+							printf("  %s[OK]%s WAL headers: all checked segments have valid headers\n",
+								   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
+						}
+						total_errors += hdr_result->error_count;
+						free_validation_result(hdr_result);
 					}
-					total_errors += hdr_result->error_count;
-					free_validation_result(hdr_result);
+
+					/* Timeline history file check */
+					ValidationResult *tl_result = check_wal_timeline(current, effective_wal);
+					if (tl_result != NULL)
+					{
+						if (tl_result->error_count > 0)
+						{
+							printf("  %s[ERROR]%s WAL timeline check failed:\n",
+								   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
+							for (int i = 0; i < tl_result->error_count; i++)
+								printf("          %s\n", tl_result->errors[i]);
+						}
+						else if (current->timeline > 1)
+						{
+							printf("  %s[OK]%s WAL timeline: history file present\n",
+								   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
+						}
+						total_errors += tl_result->error_count;
+						free_validation_result(tl_result);
+					}
 				}
+				else if (current->wal_stream)
+				{
+					/* Stream backup without explicit --wal-archive: cannot verify WAL */
+					printf("  %s[WARNING]%s WAL not verified: stream backup, no --wal-archive provided\n",
+						   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "");
+					total_warnings++;
+				}
+				/* archive mode with wal_info == NULL: auto-detection failed, skip silently */
 			}
 		}
 
@@ -357,6 +418,36 @@ cmd_check_main(int argc, char **argv)
 		}
 
 		current = current->next;
+	}
+
+	/* WAL archive-wide continuity check (once, not per-backup) */
+	if (!opts.skip_wal && wal_info != NULL &&
+		opts.level >= VALIDATION_LEVEL_CHECKSUMS)
+	{
+		printf("\n");
+		printf("WAL Archive\n");
+		printf("----------------------------------------------------\n");
+
+		ValidationResult *cont_result = check_wal_continuity(wal_info);
+		if (cont_result != NULL)
+		{
+			if (cont_result->error_count > 0)
+			{
+				printf("  %s[ERROR]%s WAL archive has gaps:\n",
+					   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
+				for (int i = 0; i < cont_result->error_count; i++)
+					printf("          %s\n", cont_result->errors[i]);
+			}
+			else
+			{
+				printf("  %s[OK]%s WAL archive: no gaps detected (%d segment%s)\n",
+					   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "",
+					   wal_info->segment_count,
+					   wal_info->segment_count == 1 ? "" : "s");
+			}
+			total_errors += cont_result->error_count;
+			free_validation_result(cont_result);
+		}
 	}
 
 	/* Print summary */

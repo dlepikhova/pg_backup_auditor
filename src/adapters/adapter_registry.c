@@ -34,6 +34,25 @@ BackupAdapter *pg_backup_auditor_adapters[] = {
 };
 
 /*
+ * Get adapter for a specific backup tool type
+ */
+BackupAdapter*
+get_adapter_for_tool(BackupTool tool)
+{
+	switch (tool)
+	{
+		case BACKUP_TOOL_PG_BASEBACKUP:
+			return &pg_basebackup_adapter;
+		case BACKUP_TOOL_PG_PROBACKUP:
+			return &pg_probackup_adapter;
+		case BACKUP_TOOL_PGBACKREST:
+			return &pgbackrest_adapter;
+		default:
+			return NULL;
+	}
+}
+
+/*
  * Detect backup type by trying each adapter
  */
 BackupAdapter*

@@ -23,6 +23,7 @@
 #ifndef TYPES_H
 #define TYPES_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
 #include <limits.h>
@@ -92,6 +93,7 @@ typedef struct BackupInfo {
 	uint64_t        wal_bytes;
 	/* Extended metadata from backup_label */
 	char            backup_method[32];  /* "streamed" or "fetch" */
+	bool            wal_stream;         /* true = WAL embedded in backup, false = external archive */
 	char            backup_from[32];    /* "primary" or "standby" */
 	char            backup_label[128];  /* User-defined label */
 	char            wal_start_file[64]; /* WAL filename from START WAL LOCATION */

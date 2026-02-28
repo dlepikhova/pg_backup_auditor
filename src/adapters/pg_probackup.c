@@ -423,6 +423,15 @@ pg_probackup_read_metadata(const char *backup_path, BackupInfo *info)
 			value[0] = '\0';
 			continue;
 		}
+
+		/* Parse stream (WAL mode: stream=true means WAL embedded, false means external archive) */
+		parse_control_line(line, "stream", value, sizeof(value));
+		if (value[0] != '\0')
+		{
+			info->wal_stream = (strcmp(value, "true") == 0);
+			value[0] = '\0';
+			continue;
+		}
 	}
 
 	fclose(fp);

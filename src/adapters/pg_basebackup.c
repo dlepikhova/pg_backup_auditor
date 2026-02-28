@@ -504,6 +504,7 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 				*newline = '\0';
 
 			str_copy(info->backup_method, value, sizeof(info->backup_method));
+			info->wal_stream = (strcmp(info->backup_method, "streamed") == 0);
 		}
 		/* BACKUP FROM: primary */
 		else if (strncmp(line, "BACKUP FROM:", 12) == 0)

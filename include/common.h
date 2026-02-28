@@ -94,5 +94,6 @@ void free_validation_result(ValidationResult *result);
 ValidationResult* check_wal_continuity(WALArchiveInfo *wal_info);
 ValidationResult* check_wal_availability(BackupInfo *backup, WALArchiveInfo *wal_info);
 ValidationResult* check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info);
+ValidationResult* check_wal_timeline(BackupInfo *backup, WALArchiveInfo *wal_info);
 
 #endif /* COMMON_H */

@@ -81,6 +81,49 @@ read_u64le(const uint8_t *buf, int off)
 		| ((uint64_t)buf[off + 7] << 56);
 }
 
+/* -----------------------------------------------------------------------
+ * CRC32C (Castagnoli) software implementation.
+ * Polynomial: 0x82F63B78 (bit-reversed 0x1EDC6F41).
+ * INIT = ~0U, FIN = ~crc — matches PostgreSQL's pg_crc32c.
+ * ----------------------------------------------------------------------- */
+static uint32_t crc32c_table[256];
+static bool     crc32c_table_initialized = false;
+
+static void
+init_crc32c_table(void)
+{
+	const uint32_t poly = 0x82F63B78U;
+	int i, j;
+
+	for (i = 0; i < 256; i++)
+	{
+		uint32_t crc = (uint32_t) i;
+
+		for (j = 0; j < 8; j++)
+			crc = (crc & 1) ? ((crc >> 1) ^ poly) : (crc >> 1);
+		crc32c_table[i] = crc;
+	}
+	crc32c_table_initialized = true;
+}
+
+/*
+ * Update a running CRC32C accumulator over 'len' bytes.
+ * Start with crc = ~0U; finalize with ~crc.
+ */
+static uint32_t
+crc32c_update(uint32_t crc, const uint8_t *buf, size_t len)
+{
+	size_t i;
+
+	if (!crc32c_table_initialized)
+		init_crc32c_table();
+
+	for (i = 0; i < len; i++)
+		crc = (crc >> 8) ^ crc32c_table[(crc ^ buf[i]) & 0xFFU];
+
+	return crc;
+}
+
 /*
  * XLogLongPageHeaderData field offsets (verified against real PG17 segment).
  *
@@ -103,14 +146,28 @@ read_u64le(const uint8_t *buf, int off)
 #define WAL_OFF_INFO         2
 #define WAL_OFF_TLI          4
 #define WAL_OFF_PAGEADDR     8
+#define WAL_OFF_REM_LEN     16   /* xlp_rem_len */
 #define WAL_OFF_SEG_SIZE    32
+#define WAL_OFF_BLCKSZ      36   /* xlp_xlog_blcksz */
 
 /* First page of every WAL segment must have this flag in xlp_info */
 #define XLP_LONG_HEADER  0x0002
 
+/* First XLogRecord starts right after the long page header */
+#define WAL_RECORD_OFFSET   WAL_LONG_HDR_SIZE  /* 40 */
+
+/* XLogRecord field offsets (within the record) */
+#define WAL_XLOG_HDR_SIZE    24   /* sizeof(XLogRecord) */
+#define WAL_XLOG_OFF_TOTLEN   0   /* xl_tot_len */
+#define WAL_XLOG_OFF_CRC     20   /* xl_crc */
+
+/* Buffer size for reading page header + first XLogRecord */
+#define WAL_READ_BUF_SIZE  8192
+
 /*
- * Read and validate the XLogLongPageHeaderData from one WAL segment.
- * Returns true if the header looks valid.
+ * Read and validate the XLogLongPageHeaderData from one WAL segment,
+ * plus CRC32C of the first XLogRecord if it fits in the read buffer.
+ * Returns true if everything looks valid.
  */
 static bool
 validate_wal_segment_header(const char *seg_path,
@@ -120,13 +177,15 @@ validate_wal_segment_header(const char *seg_path,
 							ValidationResult *result)
 {
 	FILE	   *f;
-	uint8_t		buf[WAL_LONG_HDR_SIZE];
+	uint8_t		buf[WAL_READ_BUF_SIZE];
 	size_t		n;
 	uint16_t	xlp_magic;
 	uint16_t	xlp_info;
 	uint32_t	xlp_tli;
 	uint64_t	xlp_pageaddr;
+	uint32_t	xlp_rem_len;
 	uint32_t	xlp_seg_size;
+	uint32_t	xlp_xlog_blcksz;
 	char		msg[512];
 	bool		ok = true;
 
@@ -142,7 +201,7 @@ validate_wal_segment_header(const char *seg_path,
 	n = fread(buf, 1, sizeof(buf), f);
 	fclose(f);
 
-	if (n < sizeof(buf))
+	if (n < (size_t) WAL_LONG_HDR_SIZE)
 	{
 		snprintf(msg, sizeof(msg),
 				 "WAL segment %s: file too small to read header "
@@ -152,11 +211,13 @@ validate_wal_segment_header(const char *seg_path,
 		return false;
 	}
 
-	xlp_magic    = read_u16le(buf, WAL_OFF_MAGIC);
-	xlp_info     = read_u16le(buf, WAL_OFF_INFO);
-	xlp_tli      = read_u32le(buf, WAL_OFF_TLI);
-	xlp_pageaddr = read_u64le(buf, WAL_OFF_PAGEADDR);
-	xlp_seg_size = read_u32le(buf, WAL_OFF_SEG_SIZE);
+	xlp_magic       = read_u16le(buf, WAL_OFF_MAGIC);
+	xlp_info        = read_u16le(buf, WAL_OFF_INFO);
+	xlp_tli         = read_u32le(buf, WAL_OFF_TLI);
+	xlp_pageaddr    = read_u64le(buf, WAL_OFF_PAGEADDR);
+	xlp_rem_len     = read_u32le(buf, WAL_OFF_REM_LEN);
+	xlp_seg_size    = read_u32le(buf, WAL_OFF_SEG_SIZE);
+	xlp_xlog_blcksz = read_u32le(buf, WAL_OFF_BLCKSZ);
 
 	/* Magic must be non-zero */
 	if (xlp_magic == 0)
@@ -215,31 +276,247 @@ validate_wal_segment_header(const char *seg_path,
 		ok = false;
 	}
 
+	/* Block size must be a power of two in [512, 65536] */
+	if (xlp_xlog_blcksz == 0 ||
+		(xlp_xlog_blcksz & (xlp_xlog_blcksz - 1)) != 0 ||
+		xlp_xlog_blcksz < 512 ||
+		xlp_xlog_blcksz > 65536)
+	{
+		snprintf(msg, sizeof(msg),
+				 "WAL segment %s: invalid block size in header "
+				 "(xlp_xlog_blcksz=%u)",
+				 seg_filename, xlp_xlog_blcksz);
+		add_error(result, msg);
+		ok = false;
+	}
+
+	/*
+	 * CRC32C check of the first XLogRecord.
+	 *
+	 * Only attempted when:
+	 *   - The page header looks valid so far (ok == true).
+	 *   - xlp_rem_len == 0, meaning the page starts with a complete record,
+	 *     not a continuation fragment from the previous segment.
+	 *   - We have read at least enough bytes to inspect the record header.
+	 *
+	 * PostgreSQL computes the CRC over:
+	 *   - XLogRecord bytes [0..19]  (everything before xl_crc)
+	 *   - XLogRecord bytes [24..xl_tot_len-1]  (record data payload)
+	 */
+	if (ok && xlp_rem_len == 0 &&
+		n >= (size_t)(WAL_RECORD_OFFSET + WAL_XLOG_HDR_SIZE))
+	{
+		const uint8_t *rec      = buf + WAL_RECORD_OFFSET;
+		uint32_t       xl_tot_len = read_u32le(rec, WAL_XLOG_OFF_TOTLEN);
+
+		if (xl_tot_len < (uint32_t) WAL_XLOG_HDR_SIZE)
+		{
+			snprintf(msg, sizeof(msg),
+					 "WAL segment %s: first XLogRecord has implausible "
+					 "xl_tot_len=%u",
+					 seg_filename, xl_tot_len);
+			add_error(result, msg);
+			ok = false;
+		}
+		else if ((size_t)(WAL_RECORD_OFFSET + xl_tot_len) <= n)
+		{
+			/* Record fully buffered — verify CRC32C */
+			uint32_t stored_crc = read_u32le(rec, WAL_XLOG_OFF_CRC);
+
+			/*
+			 * xl_crc == 0 means the record was written without a CRC
+			 * (e.g. pg_probackup synthetic WAL records).  Skip check.
+			 */
+			if (stored_crc == 0)
+			{
+				log_debug("WAL segment %s: first XLogRecord CRC is zero "
+						  "— skipping CRC check", seg_filename);
+			}
+			else
+			{
+				uint32_t crc = ~0U;
+
+				/* Bytes 0..19 of the record (header fields before xl_crc) */
+				crc = crc32c_update(crc, rec, 20);
+
+				/* Bytes 24..xl_tot_len-1 (data payload; skip xl_crc at 20..23) */
+				if (xl_tot_len > (uint32_t) WAL_XLOG_HDR_SIZE)
+					crc = crc32c_update(crc,
+										rec + WAL_XLOG_HDR_SIZE,
+										xl_tot_len - WAL_XLOG_HDR_SIZE);
+
+				uint32_t computed_crc = ~crc;
+
+				if (computed_crc != stored_crc)
+				{
+					snprintf(msg, sizeof(msg),
+							 "WAL segment %s: first XLogRecord CRC mismatch "
+							 "(stored=0x%08X, computed=0x%08X, xl_tot_len=%u)",
+							 seg_filename, stored_crc, computed_crc, xl_tot_len);
+					add_error(result, msg);
+					ok = false;
+				}
+				else
+					log_debug("WAL segment %s: first XLogRecord CRC OK "
+							  "(xl_tot_len=%u)", seg_filename, xl_tot_len);
+			}
+		}
+		else
+		{
+			/* Record doesn't fit in our read buffer — skip CRC check */
+			log_debug("WAL segment %s: first XLogRecord too large for CRC check "
+					  "(xl_tot_len=%u, buffered=%zu)",
+					  seg_filename, xl_tot_len, n - WAL_RECORD_OFFSET);
+		}
+	}
+
 	if (ok)
 		log_debug("WAL segment %s: header OK "
-				  "(magic=0x%04X tli=%u seg_size=0x%X)",
-				  seg_filename, xlp_magic, xlp_tli, xlp_seg_size);
+				  "(magic=0x%04X tli=%u seg_size=0x%X blcksz=%u)",
+				  seg_filename, xlp_magic, xlp_tli, xlp_seg_size,
+				  xlp_xlog_blcksz);
 
 	return ok;
 }
 
+/* WAL gap (a contiguous range of missing segments within a timeline) */
+typedef struct WALGap {
+	WALSegmentName start;
+	WALSegmentName end;
+	struct WALGap *next;
+} WALGap;
+
+/* Forward declaration — defined after check_wal_continuity */
+static void free_wal_gaps(WALGap *gaps);
+
 /*
- * Check WAL continuity
+ * Find gaps in a sorted WAL archive.
+ *
+ * Iterates through the pre-sorted segment array and reports any range of
+ * segment names that are absent between two consecutive present segments
+ * (within the same timeline).  Timeline switches are not considered gaps.
+ *
+ * Returns a linked list of WALGap structs (or NULL if no gaps / nothing to
+ * check).  Caller must free with free_wal_gaps().
+ */
+WALGap*
+find_wal_gaps(WALArchiveInfo *wal_info)
+{
+	WALGap *gaps = NULL;
+	WALGap *last_gap = NULL;
+	int     i;
+
+	if (wal_info == NULL || wal_info->segments == NULL ||
+		wal_info->segment_count < 2)
+		return NULL;
+
+	for (i = 0; i < wal_info->segment_count - 1; i++)
+	{
+		WALSegmentName *cur = &wal_info->segments[i];
+		WALSegmentName *nxt = &wal_info->segments[i + 1];
+
+		/* Timeline switch — not a gap */
+		if (cur->timeline != nxt->timeline)
+			continue;
+
+		/* Compute what the consecutive next segment should be */
+		uint32_t exp_log = cur->log_id;
+		uint32_t exp_seg = cur->seg_id + 1;
+
+		if (exp_seg == 0)   /* seg_id wrapped */
+			exp_log++;
+
+		/* Consecutive — no gap */
+		if (nxt->log_id == exp_log && nxt->seg_id == exp_seg)
+			continue;
+
+		/* Gap detected: missing range is [exp_log/exp_seg .. nxt-1] */
+		WALGap *gap = calloc(1, sizeof(WALGap));
+		if (gap == NULL)
+			break;
+
+		gap->start.timeline = cur->timeline;
+		gap->start.log_id   = exp_log;
+		gap->start.seg_id   = exp_seg;
+
+		gap->end.timeline   = nxt->timeline;
+		if (nxt->seg_id == 0)
+		{
+			gap->end.log_id = nxt->log_id - 1;
+			gap->end.seg_id = UINT32_MAX;
+		}
+		else
+		{
+			gap->end.log_id = nxt->log_id;
+			gap->end.seg_id = nxt->seg_id - 1;
+		}
+
+		gap->next = NULL;
+
+		if (last_gap == NULL)
+			gaps = gap;
+		else
+			last_gap->next = gap;
+		last_gap = gap;
+	}
+
+	return gaps;
+}
+
+/*
+ * Check WAL archive for gaps in segment continuity.
+ *
+ * Uses find_wal_gaps() on the pre-sorted segment list and reports every
+ * missing range as an error in the returned ValidationResult.
  */
 ValidationResult*
 check_wal_continuity(WALArchiveInfo *wal_info)
 {
-	/* TODO: Implement WAL continuity check
-	 *
-	 * - Sort WAL segments by timeline, log_id, seg_id
-	 * - Check for gaps in sequence
-	 * - Detect timeline switches
-	 * - Return validation result with any gaps found
-	 */
+	ValidationResult *result;
+	WALGap           *gaps, *g;
+	char              msg[256];
 
-	(void) wal_info;  /* unused for now */
+	if (wal_info == NULL)
+		return NULL;
 
-	return NULL;
+	result = calloc(1, sizeof(ValidationResult));
+	if (result == NULL)
+		return NULL;
+
+	result->status = BACKUP_STATUS_OK;
+
+	gaps = find_wal_gaps(wal_info);
+
+	for (g = gaps; g != NULL; g = g->next)
+	{
+		if (g->start.log_id == g->end.log_id &&
+			g->start.seg_id == g->end.seg_id)
+			snprintf(msg, sizeof(msg),
+					 "WAL gap: missing segment %08X%08X%08X",
+					 g->start.timeline, g->start.log_id, g->start.seg_id);
+		else
+			snprintf(msg, sizeof(msg),
+					 "WAL gap: missing segments "
+					 "%08X%08X%08X .. %08X%08X%08X",
+					 g->start.timeline, g->start.log_id, g->start.seg_id,
+					 g->end.timeline,   g->end.log_id,   g->end.seg_id);
+
+		add_error(result, msg);
+		log_warning("%s", msg);
+	}
+
+	free_wal_gaps(gaps);
+
+	if (result->error_count == 0)
+		log_info("WAL archive continuity OK (%d segment%s)",
+				 wal_info->segment_count,
+				 wal_info->segment_count == 1 ? "" : "s");
+	else
+		log_error("WAL archive has %d gap%s",
+				  result->error_count,
+				  result->error_count == 1 ? "" : "s");
+
+	return result;
 }
 
 /*
@@ -377,34 +654,9 @@ check_wal_availability(BackupInfo *backup, WALArchiveInfo *wal_info)
 }
 
 /*
- * Find gaps in WAL archive
- */
-typedef struct WALGap {
-	WALSegmentName start;
-	WALSegmentName end;
-	struct WALGap *next;
-} WALGap;
-
-WALGap*
-find_wal_gaps(WALArchiveInfo *wal_info)
-{
-	/* TODO: Implement gap detection
-	 *
-	 * - Iterate through sorted segments
-	 * - When seg_id jumps by more than 1, record gap
-	 * - Handle log_id overflow (seg_id wraps to 0)
-	 * - Return linked list of gaps
-	 */
-
-	(void) wal_info;  /* unused for now */
-
-	return NULL;
-}
-
-/*
  * Free WAL gap list
  */
-void
+static void
 free_wal_gaps(WALGap *gaps)
 {
 	WALGap *current = gaps;
@@ -502,6 +754,62 @@ check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info)
 				  backup->backup_id,
 				  result->error_count, result->error_count == 1 ? "" : "s",
 				  checked, checked == 1 ? "" : "s");
+
+	return result;
+}
+
+/*
+ * Check that a timeline history file exists in the WAL archive.
+ *
+ * For timeline 1 there is no history file, so the check is skipped.
+ * For timeline N > 1, PostgreSQL writes an N-digit hex file named
+ * NNNNNNNN.history (e.g. "00000002.history") to the WAL archive
+ * when a standby is promoted.  Its absence means the archive is
+ * incomplete or the backup was taken on an untracked timeline branch.
+ */
+ValidationResult*
+check_wal_timeline(BackupInfo *backup, WALArchiveInfo *wal_info)
+{
+	ValidationResult *result;
+	char              history_filename[32];
+	char              history_path[PATH_MAX];
+	char              msg[512];
+
+	if (backup == NULL || wal_info == NULL)
+		return NULL;
+
+	result = calloc(1, sizeof(ValidationResult));
+	if (result == NULL)
+		return NULL;
+
+	result->status = BACKUP_STATUS_OK;
+
+	/* Timeline 1 never has a history file */
+	if (backup->timeline <= 1)
+	{
+		log_debug("Backup %s: timeline 1 — no history file expected",
+				  backup->backup_id);
+		return result;
+	}
+
+	/* History file name: 8 hex digits + ".history" */
+	snprintf(history_filename, sizeof(history_filename),
+			 "%08X.history", backup->timeline);
+
+	path_join(history_path, sizeof(history_path),
+			  wal_info->archive_path, history_filename);
+
+	if (!file_exists(history_path))
+	{
+		snprintf(msg, sizeof(msg),
+				 "Timeline %u history file missing in WAL archive: %s",
+				 backup->timeline, history_filename);
+		add_error(result, msg);
+		log_error("Backup %s: %s", backup->backup_id, msg);
+	}
+	else
+		log_info("Backup %s: timeline history file %s present",
+				 backup->backup_id, history_filename);
 
 	return result;
 }

@@ -57,6 +57,7 @@ extern BackupAdapter pgbackrest_adapter;
 
 /* Helper functions */
 BackupAdapter* detect_backup_type(const char *path);
+BackupAdapter* get_adapter_for_tool(BackupTool tool);
 const char* backup_type_to_string(BackupType type);
 const char* backup_tool_to_string(BackupTool tool);
 const char* backup_status_to_string(BackupStatus status);
