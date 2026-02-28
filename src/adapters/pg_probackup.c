@@ -270,7 +270,7 @@ pg_probackup_read_metadata(const char *backup_path, BackupInfo *info)
 	char control_path[PATH_MAX];
 	FILE *fp;
 	char line[1024];
-	char value[256];
+	char value[256] = {0};
 
 	/* Construct path to backup.control */
 	path_join(control_path, sizeof(control_path), backup_path, "backup.control");
