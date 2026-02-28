@@ -464,6 +464,164 @@ START_TEST(test_compressed_file_skips_crc)
 }
 END_TEST
 
+/* ================================================================== *
+ * validate_backup_metadata() tests
+ * ================================================================== */
+
+/*
+ * Helper: build a fully valid BackupInfo pointing to an existing directory.
+ */
+static void
+fill_valid_backup(BackupInfo *b)
+{
+	memset(b, 0, sizeof(*b));
+	strcpy(b->backup_id, "TEST0001");
+	strcpy(b->backup_path, "/tmp");   /* always exists */
+	b->start_time = 1000;
+	b->end_time   = 2000;
+	b->start_lsn  = 0x1000000;
+	b->stop_lsn   = 0x2000000;
+	b->timeline   = 1;
+	b->pg_version = 170000;
+	b->status     = BACKUP_STATUS_OK;
+}
+
+/* NULL input → NULL returned (no crash) */
+START_TEST(test_meta_null_info)
+{
+	ValidationResult *res = validate_backup_metadata(NULL);
+	ck_assert_ptr_null(res);
+}
+END_TEST
+
+/* All fields valid → OK, 0 errors, 0 warnings */
+START_TEST(test_meta_valid_backup)
+{
+	BackupInfo b;
+	fill_valid_backup(&b);
+
+	ValidationResult *res = validate_backup_metadata(&b);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count,   0);
+	ck_assert_int_eq(res->warning_count, 0);
+	ck_assert_int_eq(res->status, BACKUP_STATUS_OK);
+	free_validation_result(res);
+}
+END_TEST
+
+/* Empty backup_id → 1 error */
+START_TEST(test_meta_missing_backup_id)
+{
+	BackupInfo b;
+	fill_valid_backup(&b);
+	b.backup_id[0] = '\0';
+
+	ValidationResult *res = validate_backup_metadata(&b);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_gt(res->error_count, 0);
+	ck_assert(strstr(res->errors[0], "backup_id") != NULL);
+	free_validation_result(res);
+}
+END_TEST
+
+/* Empty backup_path → 1 error */
+START_TEST(test_meta_missing_backup_path)
+{
+	BackupInfo b;
+	fill_valid_backup(&b);
+	b.backup_path[0] = '\0';
+
+	ValidationResult *res = validate_backup_metadata(&b);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_gt(res->error_count, 0);
+	ck_assert(strstr(res->errors[0], "backup_path") != NULL);
+	free_validation_result(res);
+}
+END_TEST
+
+/* Non-existent backup_path → 1 error "does not exist" */
+START_TEST(test_meta_nonexistent_path)
+{
+	BackupInfo b;
+	fill_valid_backup(&b);
+	strcpy(b.backup_path, "/tmp/pg_bv_nonexistent_path_12345");
+
+	ValidationResult *res = validate_backup_metadata(&b);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_gt(res->error_count, 0);
+	ck_assert(strstr(res->errors[0], "does not exist") != NULL);
+	free_validation_result(res);
+}
+END_TEST
+
+/* start_time == 0 → 1 warning "Missing start_time" */
+START_TEST(test_meta_missing_start_time)
+{
+	BackupInfo b;
+	fill_valid_backup(&b);
+	b.start_time = 0;
+
+	ValidationResult *res = validate_backup_metadata(&b);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count, 0);
+	ck_assert_int_gt(res->warning_count, 0);
+	ck_assert(strstr(res->warnings[0], "start_time") != NULL);
+	free_validation_result(res);
+}
+END_TEST
+
+/* status=OK but end_time==0 → warning "Missing end_time" */
+START_TEST(test_meta_missing_end_time)
+{
+	BackupInfo b;
+	fill_valid_backup(&b);
+	b.end_time = 0;
+	b.status   = BACKUP_STATUS_OK;
+
+	ValidationResult *res = validate_backup_metadata(&b);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count, 0);
+	ck_assert_int_gt(res->warning_count, 0);
+	bool found = false;
+	for (int i = 0; i < res->warning_count; i++)
+		if (strstr(res->warnings[i], "end_time")) found = true;
+	ck_assert(found);
+	free_validation_result(res);
+}
+END_TEST
+
+/* start_time > end_time → 1 error "Invalid timestamps" */
+START_TEST(test_meta_invalid_timestamps)
+{
+	BackupInfo b;
+	fill_valid_backup(&b);
+	b.start_time = 9000;
+	b.end_time   = 1000;
+
+	ValidationResult *res = validate_backup_metadata(&b);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_gt(res->error_count, 0);
+	ck_assert(strstr(res->errors[0], "Invalid timestamps") != NULL);
+	free_validation_result(res);
+}
+END_TEST
+
+/* start_lsn >= stop_lsn → 1 error "Invalid LSN range" */
+START_TEST(test_meta_invalid_lsn)
+{
+	BackupInfo b;
+	fill_valid_backup(&b);
+	b.start_lsn = 0x3000000;
+	b.stop_lsn  = 0x1000000;
+
+	ValidationResult *res = validate_backup_metadata(&b);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_gt(res->error_count, 0);
+	ck_assert(strstr(res->errors[0], "LSN") != NULL);
+	free_validation_result(res);
+}
+END_TEST
+
 /* ------------------------------------------------------------------ *
  * Suite assembly
  * ------------------------------------------------------------------ */
@@ -490,6 +648,18 @@ backup_validator_suite(void)
 	tcase_add_test(tc_chk, test_dir_entries_skipped);
 	tcase_add_test(tc_chk, test_compressed_file_skips_crc);
 	suite_add_tcase(s, tc_chk);
+
+	TCase *tc_meta = tcase_create("validate_backup_metadata");
+	tcase_add_test(tc_meta, test_meta_null_info);
+	tcase_add_test(tc_meta, test_meta_valid_backup);
+	tcase_add_test(tc_meta, test_meta_missing_backup_id);
+	tcase_add_test(tc_meta, test_meta_missing_backup_path);
+	tcase_add_test(tc_meta, test_meta_nonexistent_path);
+	tcase_add_test(tc_meta, test_meta_missing_start_time);
+	tcase_add_test(tc_meta, test_meta_missing_end_time);
+	tcase_add_test(tc_meta, test_meta_invalid_timestamps);
+	tcase_add_test(tc_meta, test_meta_invalid_lsn);
+	suite_add_tcase(s, tc_meta);
 
 	return s;
 }

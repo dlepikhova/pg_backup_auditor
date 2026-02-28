@@ -51,7 +51,9 @@ TEST_SRCS = test_runner.c \
             test_xlog.c \
             test_ini_parser.c \
             test_wal_validator.c \
-            test_backup_validator.c
+            test_backup_validator.c \
+            test_fs_scanner.c \
+            test_pg_probackup.c
 
 # Object files
 COMMON_OBJS = $(COMMON_SRCS:.c=.o)

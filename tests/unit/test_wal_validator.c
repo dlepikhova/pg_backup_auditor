@@ -28,6 +28,7 @@
 #include "../../include/types.h"
 #include "../../include/common.h"
 #include "../../include/adapter.h"
+#include "test_integration_helpers.h"
 
 /*
  * Helper: Create a WALArchiveInfo with test segments
@@ -264,12 +265,9 @@ END_TEST
 
 /* -----------------------------------------------------------------------
  * Integration tests: real pg_probackup backup
- * These tests are skipped if the backup catalog is not present.
+ * These tests are skipped if the required environment variables are not set
+ * or if the backup catalog is not present at the given path.
  * ----------------------------------------------------------------------- */
-
-#define REAL_CATALOG    "/Users/daria/projects/postgrespro/backup"
-#define REAL_INSTANCE   "test"
-#define REAL_BACKUP_ID  "TB50D5"
 
 /*
  * get_wal_archive_path() returns the correct default path for pg_probackup
@@ -280,8 +278,11 @@ START_TEST(test_pg_probackup_wal_path_detection)
 	char backup_path[PATH_MAX];
 	char *wal_path;
 
+	INTEGRATION_SKIP_BACKUP();
+
 	snprintf(backup_path, sizeof(backup_path),
-			 "%s/backups/%s/%s", REAL_CATALOG, REAL_INSTANCE, REAL_BACKUP_ID);
+			 "%s/backups/%s/%s",
+			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
 	if (!is_directory(backup_path))
 	{
@@ -289,14 +290,14 @@ START_TEST(test_pg_probackup_wal_path_detection)
 		return;
 	}
 
-	wal_path = pg_probackup_adapter.get_wal_archive_path(backup_path, REAL_INSTANCE);
-
+	wal_path = pg_probackup_adapter.get_wal_archive_path(backup_path,
+														 get_test_instance());
 	ck_assert_ptr_nonnull(wal_path);
 
 	/* Expected: <catalog>/wal/<instance> */
 	char expected[PATH_MAX];
 	snprintf(expected, sizeof(expected),
-			 "%s/wal/%s", REAL_CATALOG, REAL_INSTANCE);
+			 "%s/wal/%s", get_test_catalog(), get_test_instance());
 	ck_assert_str_eq(wal_path, expected);
 
 	free(wal_path);
@@ -315,8 +316,11 @@ START_TEST(test_pg_probackup_wal_availability_real)
 	WALArchiveInfo *wal_info;
 	ValidationResult *result;
 
+	INTEGRATION_SKIP_BACKUP();
+
 	snprintf(backup_path, sizeof(backup_path),
-			 "%s/backups/%s/%s", REAL_CATALOG, REAL_INSTANCE, REAL_BACKUP_ID);
+			 "%s/backups/%s/%s",
+			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
 	if (!is_directory(backup_path))
 	{
@@ -327,7 +331,7 @@ START_TEST(test_pg_probackup_wal_availability_real)
 	/* Scan backup metadata */
 	backup = pg_probackup_adapter.scan(backup_path);
 	ck_assert_ptr_nonnull(backup);
-	ck_assert_str_eq(backup->backup_id, REAL_BACKUP_ID);
+	ck_assert_str_eq(backup->backup_id, get_test_backup_id());
 
 	/* LSN must be parsed from backup.control */
 	ck_assert(backup->start_lsn != 0 || backup->stop_lsn != 0);
@@ -369,10 +373,15 @@ START_TEST(test_pg_probackup_wal_missing_segment)
 	BackupInfo *backup;
 	WALArchiveInfo *wal_info;
 	ValidationResult *result;
+	WALSegmentName seg_a_info;
+	char seg_a_name[25];  /* "TTTTTTTTLLLLLLLLSSSSSSSS\0" */
 	int rc;
 
+	INTEGRATION_SKIP_BACKUP();
+
 	snprintf(backup_path, sizeof(backup_path),
-			 "%s/backups/%s/%s", REAL_CATALOG, REAL_INSTANCE, REAL_BACKUP_ID);
+			 "%s/backups/%s/%s",
+			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
 	if (!is_directory(backup_path))
 	{
@@ -383,14 +392,16 @@ START_TEST(test_pg_probackup_wal_missing_segment)
 	backup = pg_probackup_adapter.scan(backup_path);
 	ck_assert_ptr_nonnull(backup);
 
-	wal_path = pg_probackup_adapter.get_wal_archive_path(backup_path, backup->instance_name);
+	/* Derive the first required segment from the backup's start LSN */
+	lsn_to_seg(backup->start_lsn, backup->timeline, &seg_a_info, 0);
+	format_wal_filename(&seg_a_info, seg_a_name, sizeof(seg_a_name));
+
+	wal_path = pg_probackup_adapter.get_wal_archive_path(backup_path,
+														 backup->instance_name);
 	ck_assert_ptr_nonnull(wal_path);
 
-	/* Rename segment 000000010000000000000002 — it is required by this backup */
-	snprintf(seg_original, sizeof(seg_original),
-			 "%s/000000010000000000000002", wal_path);
-	snprintf(seg_renamed, sizeof(seg_renamed),
-			 "%s/000000010000000000000002.broken", wal_path);
+	snprintf(seg_original, sizeof(seg_original), "%s/%s",        wal_path, seg_a_name);
+	snprintf(seg_renamed,  sizeof(seg_renamed),  "%s/%s.broken", wal_path, seg_a_name);
 
 	rc = rename(seg_original, seg_renamed);
 	ck_assert_int_eq(rc, 0);
@@ -406,7 +417,7 @@ START_TEST(test_pg_probackup_wal_missing_segment)
 	ck_assert_int_eq(result->status, BACKUP_STATUS_ERROR);
 	ck_assert_int_gt(result->error_count, 0);
 	ck_assert_ptr_nonnull(result->errors[0]);
-	ck_assert(strstr(result->errors[0], "000000010000000000000002") != NULL);
+	ck_assert(strstr(result->errors[0], seg_a_name) != NULL);
 
 	free_validation_result(result);
 	free_wal_archive_info(wal_info);
@@ -462,9 +473,8 @@ write_seg_header(const char *path, const uint8_t buf[WAL_HDR_LEN])
  * ----------------------------------------------------------------------- */
 
 /*
- * Rename the required segment 000000010000000000000002.
- * check_wal_availability should report it missing.
- * check_wal_headers should return OK for the remaining segment (seg 003).
+ * Rename the first required segment (derived from start_lsn).
+ * check_wal_headers should return OK for the remaining segment (stop_lsn seg).
  */
 START_TEST(test_pg_probackup_wal_headers_missing_seg)
 {
@@ -475,10 +485,15 @@ START_TEST(test_pg_probackup_wal_headers_missing_seg)
 	BackupInfo *backup;
 	WALArchiveInfo *wal_info;
 	ValidationResult *result;
+	WALSegmentName seg_a_info;
+	char seg_a_name[25];
 	int rc;
 
+	INTEGRATION_SKIP_BACKUP();
+
 	snprintf(backup_path, sizeof(backup_path),
-			 "%s/backups/%s/%s", REAL_CATALOG, REAL_INSTANCE, REAL_BACKUP_ID);
+			 "%s/backups/%s/%s",
+			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
 	if (!is_directory(backup_path))
 	{
@@ -489,11 +504,15 @@ START_TEST(test_pg_probackup_wal_headers_missing_seg)
 	backup = pg_probackup_adapter.scan(backup_path);
 	ck_assert_ptr_nonnull(backup);
 
-	wal_path = pg_probackup_adapter.get_wal_archive_path(backup_path, backup->instance_name);
+	lsn_to_seg(backup->start_lsn, backup->timeline, &seg_a_info, 0);
+	format_wal_filename(&seg_a_info, seg_a_name, sizeof(seg_a_name));
+
+	wal_path = pg_probackup_adapter.get_wal_archive_path(backup_path,
+														 backup->instance_name);
 	ck_assert_ptr_nonnull(wal_path);
 
-	snprintf(seg_orig,   sizeof(seg_orig),   "%s/000000010000000000000002", wal_path);
-	snprintf(seg_broken, sizeof(seg_broken),  "%s/000000010000000000000002.broken", wal_path);
+	snprintf(seg_orig,   sizeof(seg_orig),   "%s/%s",        wal_path, seg_a_name);
+	snprintf(seg_broken, sizeof(seg_broken),  "%s/%s.broken", wal_path, seg_a_name);
 
 	rc = rename(seg_orig, seg_broken);
 	ck_assert_int_eq(rc, 0);
@@ -519,7 +538,7 @@ START_TEST(test_pg_probackup_wal_headers_missing_seg)
 END_TEST
 
 /*
- * Patch xlp_tli in segment 000000010000000000000003 to timeline 99.
+ * Patch xlp_tli in the stop_lsn segment to timeline 99.
  * check_wal_headers should report a timeline mismatch for that segment.
  */
 START_TEST(test_pg_probackup_wal_headers_bad_tli)
@@ -527,14 +546,19 @@ START_TEST(test_pg_probackup_wal_headers_bad_tli)
 	extern BackupAdapter pg_probackup_adapter;
 	char backup_path[PATH_MAX];
 	char *wal_path;
-	char seg003[PATH_MAX];
+	char seg_b_path[PATH_MAX];
 	BackupInfo *backup;
 	WALArchiveInfo *wal_info;
 	ValidationResult *result;
+	WALSegmentName seg_b_info;
+	char seg_b_name[25];
 	uint8_t orig[WAL_HDR_LEN], patched[WAL_HDR_LEN];
 
+	INTEGRATION_SKIP_BACKUP();
+
 	snprintf(backup_path, sizeof(backup_path),
-			 "%s/backups/%s/%s", REAL_CATALOG, REAL_INSTANCE, REAL_BACKUP_ID);
+			 "%s/backups/%s/%s",
+			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
 	if (!is_directory(backup_path))
 	{
@@ -545,17 +569,21 @@ START_TEST(test_pg_probackup_wal_headers_bad_tli)
 	backup = pg_probackup_adapter.scan(backup_path);
 	ck_assert_ptr_nonnull(backup);
 
-	wal_path = pg_probackup_adapter.get_wal_archive_path(backup_path, backup->instance_name);
+	lsn_to_seg(backup->stop_lsn, backup->timeline, &seg_b_info, 0);
+	format_wal_filename(&seg_b_info, seg_b_name, sizeof(seg_b_name));
+
+	wal_path = pg_probackup_adapter.get_wal_archive_path(backup_path,
+														 backup->instance_name);
 	ck_assert_ptr_nonnull(wal_path);
 
-	snprintf(seg003, sizeof(seg003), "%s/000000010000000000000003", wal_path);
+	snprintf(seg_b_path, sizeof(seg_b_path), "%s/%s", wal_path, seg_b_name);
 
-	ck_assert(read_seg_header(seg003, orig));
+	ck_assert(read_seg_header(seg_b_path, orig));
 
 	/* Patch: set xlp_tli (offset 4, uint32 LE) to 99 */
 	memcpy(patched, orig, WAL_HDR_LEN);
 	patched[4] = 99; patched[5] = 0; patched[6] = 0; patched[7] = 0;
-	ck_assert(write_seg_header(seg003, patched));
+	ck_assert(write_seg_header(seg_b_path, patched));
 
 	wal_info = scan_wal_archive(wal_path);
 	ck_assert_ptr_nonnull(wal_info);
@@ -563,7 +591,7 @@ START_TEST(test_pg_probackup_wal_headers_bad_tli)
 	result = check_wal_headers(backup, wal_info);
 
 	/* Restore before asserting */
-	write_seg_header(seg003, orig);
+	write_seg_header(seg_b_path, orig);
 
 	ck_assert_ptr_nonnull(result);
 	ck_assert_int_gt(result->error_count, 0);
@@ -579,23 +607,29 @@ START_TEST(test_pg_probackup_wal_headers_bad_tli)
 END_TEST
 
 /*
- * Copy the header of segment 000000010000000000000002 into segment 000000010000000000000003.
- * The header will say xlp_pageaddr=0x2000000 but we expect 0x3000000 for segment 3.
+ * Copy the header of the start_lsn segment into the stop_lsn segment.
+ * The stop_lsn segment header will have the wrong xlp_pageaddr.
  * check_wal_headers should report a page address mismatch.
+ * Skipped if start_lsn and stop_lsn fall in the same segment.
  */
 START_TEST(test_pg_probackup_wal_headers_bad_pageaddr)
 {
 	extern BackupAdapter pg_probackup_adapter;
 	char backup_path[PATH_MAX];
 	char *wal_path;
-	char seg002[PATH_MAX], seg003[PATH_MAX];
+	char seg_a_path[PATH_MAX], seg_b_path[PATH_MAX];
 	BackupInfo *backup;
 	WALArchiveInfo *wal_info;
 	ValidationResult *result;
-	uint8_t hdr002[WAL_HDR_LEN], orig003[WAL_HDR_LEN];
+	WALSegmentName seg_a_info, seg_b_info;
+	char seg_a_name[25], seg_b_name[25];
+	uint8_t hdr_a[WAL_HDR_LEN], orig_b[WAL_HDR_LEN];
+
+	INTEGRATION_SKIP_BACKUP();
 
 	snprintf(backup_path, sizeof(backup_path),
-			 "%s/backups/%s/%s", REAL_CATALOG, REAL_INSTANCE, REAL_BACKUP_ID);
+			 "%s/backups/%s/%s",
+			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
 	if (!is_directory(backup_path))
 	{
@@ -606,17 +640,30 @@ START_TEST(test_pg_probackup_wal_headers_bad_pageaddr)
 	backup = pg_probackup_adapter.scan(backup_path);
 	ck_assert_ptr_nonnull(backup);
 
-	wal_path = pg_probackup_adapter.get_wal_archive_path(backup_path, backup->instance_name);
+	lsn_to_seg(backup->start_lsn, backup->timeline, &seg_a_info, 0);
+	lsn_to_seg(backup->stop_lsn,  backup->timeline, &seg_b_info, 0);
+	format_wal_filename(&seg_a_info, seg_a_name, sizeof(seg_a_name));
+	format_wal_filename(&seg_b_info, seg_b_name, sizeof(seg_b_name));
+
+	if (seg_a_info.seg_id == seg_b_info.seg_id)
+	{
+		fprintf(stderr, "SKIP: backup spans only one WAL segment, need two distinct segments\n");
+		free_backup_list(backup);
+		return;
+	}
+
+	wal_path = pg_probackup_adapter.get_wal_archive_path(backup_path,
+														 backup->instance_name);
 	ck_assert_ptr_nonnull(wal_path);
 
-	snprintf(seg002, sizeof(seg002), "%s/000000010000000000000002", wal_path);
-	snprintf(seg003, sizeof(seg003), "%s/000000010000000000000003", wal_path);
+	snprintf(seg_a_path, sizeof(seg_a_path), "%s/%s", wal_path, seg_a_name);
+	snprintf(seg_b_path, sizeof(seg_b_path), "%s/%s", wal_path, seg_b_name);
 
-	ck_assert(read_seg_header(seg002, hdr002));
-	ck_assert(read_seg_header(seg003, orig003));
+	ck_assert(read_seg_header(seg_a_path, hdr_a));
+	ck_assert(read_seg_header(seg_b_path, orig_b));
 
-	/* Overwrite seg003 header with seg002 header (wrong xlp_pageaddr) */
-	ck_assert(write_seg_header(seg003, hdr002));
+	/* Overwrite seg_b header with seg_a header (wrong xlp_pageaddr) */
+	ck_assert(write_seg_header(seg_b_path, hdr_a));
 
 	wal_info = scan_wal_archive(wal_path);
 	ck_assert_ptr_nonnull(wal_info);
@@ -624,7 +671,7 @@ START_TEST(test_pg_probackup_wal_headers_bad_pageaddr)
 	result = check_wal_headers(backup, wal_info);
 
 	/* Restore before asserting */
-	write_seg_header(seg003, orig003);
+	write_seg_header(seg_b_path, orig_b);
 
 	ck_assert_ptr_nonnull(result);
 	ck_assert_int_gt(result->error_count, 0);
@@ -653,8 +700,11 @@ START_TEST(test_pg_probackup_wal_headers_real)
 	WALArchiveInfo *wal_info;
 	ValidationResult *result;
 
+	INTEGRATION_SKIP_BACKUP();
+
 	snprintf(backup_path, sizeof(backup_path),
-			 "%s/backups/%s/%s", REAL_CATALOG, REAL_INSTANCE, REAL_BACKUP_ID);
+			 "%s/backups/%s/%s",
+			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
 	if (!is_directory(backup_path))
 	{

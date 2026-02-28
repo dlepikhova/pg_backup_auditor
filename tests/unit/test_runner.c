@@ -33,6 +33,8 @@ extern Suite *xlog_suite(void);
 extern Suite *ini_parser_suite(void);
 extern Suite *wal_validator_suite(void);
 extern Suite *backup_validator_suite(void);
+extern Suite *fs_scanner_suite(void);
+extern Suite *pg_probackup_suite(void);
 
 int
 main(void)
@@ -52,6 +54,8 @@ main(void)
 	srunner_add_suite(sr, ini_parser_suite());
 	srunner_add_suite(sr, wal_validator_suite());
 	srunner_add_suite(sr, backup_validator_suite());
+	srunner_add_suite(sr, fs_scanner_suite());
+	srunner_add_suite(sr, pg_probackup_suite());
 
 	/* Run tests */
 	srunner_run_all(sr, CK_NORMAL);
