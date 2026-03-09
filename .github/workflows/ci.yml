@@ -74,3 +74,39 @@ jobs:
           bash <(curl -s https://codecov.io/bash) || echo "Codecov upload failed"
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  integration:
+    name: Integration tests (ubuntu-24.04 + PG 17)
+    needs: [test]
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg
+          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y \
+            postgresql-17 \
+            postgresql-server-dev-17 \
+            check
+
+      - name: Build
+        run: |
+          make clean
+          make CC=gcc
+
+      - name: Create integration test fixtures
+        run: python3 tests/fixtures/create_test_catalog.py /tmp/pg_aud_fixture
+
+      - name: Run integration tests
+        env:
+          PG_BACKUP_AUDITOR_TEST_CATALOG: /tmp/pg_aud_fixture
+          PG_BACKUP_AUDITOR_TEST_INSTANCE: testinstance
+          PG_BACKUP_AUDITOR_TEST_BACKUP_ID: TB50D5
+        run: cd tests/unit && make CC=gcc run

@@ -164,6 +164,12 @@ crc32c_update(uint32_t crc, const uint8_t *buf, size_t len)
 /* Buffer size for reading page header + first XLogRecord */
 #define WAL_READ_BUF_SIZE  8192
 
+/* Short page header on continuation pages (XLogPageHeaderData, MAXALIGN'd to 24) */
+#define WAL_SHORT_HDR_SIZE  24
+
+/* Align n up to the nearest 8-byte boundary (mirrors PostgreSQL MAXALIGN on 64-bit) */
+#define WAL_MAXALIGN(n)  (((uint32_t)(n) + 7U) & ~7U)
+
 /*
  * Read and validate the XLogLongPageHeaderData from one WAL segment,
  * plus CRC32C of the first XLogRecord if it fits in the read buffer.
@@ -377,6 +383,169 @@ validate_wal_segment_header(const char *seg_path,
 				  xlp_xlog_blcksz);
 
 	return ok;
+}
+
+/*
+ * validate_wal_segment_records
+ *
+ * Read the WAL segment at seg_path page by page and validate the CRC32C of
+ * every XLogRecord that fits entirely within one page.
+ *
+ * Records that span a page boundary (xl_tot_len > bytes remaining on the
+ * current page) are intentionally skipped: their presence is already verified
+ * by check_wal_availability(), and assembling cross-page fragments requires
+ * significantly more complexity for rarely-encountered large records.
+ *
+ * Also skipped: records whose stored xl_crc == 0.  pg_probackup writes
+ * synthetic WAL records without a checksum; treating them as errors would
+ * produce false positives.
+ *
+ * Returns the number of records whose CRC was actually checked.
+ * Errors are appended to *result.
+ */
+static int
+validate_wal_segment_records(const char *seg_path,
+							 const char *seg_filename,
+							 ValidationResult *result)
+{
+	FILE	   *fp;
+	uint8_t		hdr_peek[WAL_LONG_HDR_SIZE];
+	uint8_t    *page_buf;
+	size_t		n_read;
+	uint32_t	blcksz;
+	int			page_no = 0;
+	int			records_checked = 0;
+	char		msg[512];
+
+	fp = fopen(seg_path, "rb");
+	if (fp == NULL)
+		return 0;
+
+	/* Peek at the first page header to learn the block size. */
+	n_read = fread(hdr_peek, 1, sizeof(hdr_peek), fp);
+	if (n_read < (size_t) WAL_LONG_HDR_SIZE)
+	{
+		fclose(fp);
+		return 0;	/* too small — already reported by validate_wal_segment_header */
+	}
+
+	blcksz = read_u32le(hdr_peek, WAL_OFF_BLCKSZ);
+	if (blcksz < 512 || blcksz > 65536)
+	{
+		fclose(fp);
+		return 0;	/* invalid — already reported */
+	}
+
+	page_buf = (uint8_t *) malloc(blcksz);
+	if (page_buf == NULL)
+	{
+		fclose(fp);
+		return 0;
+	}
+
+	rewind(fp);
+
+	while ((n_read = fread(page_buf, 1, blcksz, fp)) >= (size_t) WAL_LONG_HDR_SIZE)
+	{
+		uint32_t	hdr_size   = (page_no == 0) ? WAL_LONG_HDR_SIZE : WAL_SHORT_HDR_SIZE;
+		uint32_t	xlp_rem_len;
+		uint32_t	rec_off;
+
+		if (n_read < hdr_size)
+			break;	/* truncated page header */
+
+		xlp_rem_len = read_u32le(page_buf, WAL_OFF_REM_LEN);
+
+		/*
+		 * First complete record on this page starts after the page header
+		 * plus any continuation bytes from a record that began on the previous
+		 * page, aligned up to the next 8-byte boundary.
+		 */
+		rec_off = WAL_MAXALIGN(hdr_size + xlp_rem_len);
+
+		while (rec_off + (uint32_t) WAL_XLOG_HDR_SIZE <= (uint32_t) n_read)
+		{
+			const uint8_t *rec        = page_buf + rec_off;
+			uint32_t       xl_tot_len = read_u32le(rec, WAL_XLOG_OFF_TOTLEN);
+			uint32_t       bytes_avail;
+			uint32_t       xl_crc;
+
+			if (xl_tot_len == 0)
+				break;	/* zero-fill or end of valid records on this page */
+
+			if (xl_tot_len < (uint32_t) WAL_XLOG_HDR_SIZE)
+			{
+				snprintf(msg, sizeof(msg),
+						 "WAL segment %s page %d offset %u: "
+						 "invalid xl_tot_len=%u (minimum %d)",
+						 seg_filename, page_no, rec_off,
+						 xl_tot_len, WAL_XLOG_HDR_SIZE);
+				add_error(result, msg);
+				break;
+			}
+
+			bytes_avail = (uint32_t) n_read - rec_off;
+			if (xl_tot_len > bytes_avail)
+				break;	/* record crosses page boundary — skip */
+
+			xl_crc = read_u32le(rec, WAL_XLOG_OFF_CRC);
+
+			if (xl_crc == 0)
+			{
+				/*
+				 * Stored CRC is zero → synthetic record (e.g. written by
+				 * pg_probackup).  Skip the checksum comparison.
+				 */
+				log_debug("WAL segment %s page %d offset %u: xl_crc=0, skipping",
+						  seg_filename, page_no, rec_off);
+			}
+			else
+			{
+				uint32_t crc = ~0U;
+				uint32_t computed_crc;
+
+				if (!crc32c_table_initialized)
+					init_crc32c_table();
+
+				/* Bytes [0..19] — header fields before xl_crc */
+				crc = crc32c_update(crc, rec, 20);
+
+				/* Bytes [24..xl_tot_len-1] — data payload after xl_crc */
+				if (xl_tot_len > (uint32_t) WAL_XLOG_HDR_SIZE)
+					crc = crc32c_update(crc,
+										rec + WAL_XLOG_HDR_SIZE,
+										xl_tot_len - WAL_XLOG_HDR_SIZE);
+
+				computed_crc = ~crc;
+
+				if (computed_crc != xl_crc)
+				{
+					snprintf(msg, sizeof(msg),
+							 "WAL segment %s page %d offset %u: "
+							 "CRC mismatch (stored=0x%08X, computed=0x%08X, "
+							 "xl_tot_len=%u)",
+							 seg_filename, page_no, rec_off,
+							 xl_crc, computed_crc, xl_tot_len);
+					add_error(result, msg);
+				}
+			}
+
+			records_checked++;
+			rec_off += WAL_MAXALIGN(xl_tot_len);
+		}
+
+		page_no++;
+	}
+
+	free(page_buf);
+	fclose(fp);
+
+	log_debug("WAL segment %s: %d record%s checked across %d page%s",
+			  seg_filename,
+			  records_checked, records_checked == 1 ? "" : "s",
+			  page_no, page_no == 1 ? "" : "s");
+
+	return records_checked;
 }
 
 /* WAL gap (a contiguous range of missing segments within a timeline) */
@@ -730,9 +899,19 @@ check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info)
 				((uint64_t)cur.log_id * 0x100000000ULL + (uint64_t)cur.seg_id)
 				* (uint64_t)0x1000000;
 
+			int errors_before = result->error_count;
+
 			validate_wal_segment_header(seg_path, seg_filename,
 										backup->timeline, expected_pageaddr,
 										result);
+
+			/*
+			 * Only validate individual record CRCs when the page header is
+			 * clean — a corrupt header makes record offsets unreliable.
+			 */
+			if (result->error_count == errors_before)
+				validate_wal_segment_records(seg_path, seg_filename, result);
+
 			checked++;
 		}
 		/* Missing segments are skipped — check_wal_availability reports them */

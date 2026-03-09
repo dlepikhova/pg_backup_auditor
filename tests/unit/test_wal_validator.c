@@ -24,6 +24,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <check.h>
 #include "../../include/types.h"
 #include "../../include/common.h"
@@ -733,6 +735,274 @@ START_TEST(test_pg_probackup_wal_headers_real)
 }
 END_TEST
 
+/* ------------------------------------------------------------------ *
+ * Per-record CRC unit tests
+ *
+ * These tests call check_wal_headers() with a synthetic WAL segment
+ * written to /tmp.  No real backup catalog is required.
+ *
+ * Segment used: timeline=1, start_lsn=stop_lsn=0x1000000 → file name
+ * 000000010000000000000001, seg_size=16MB, blcksz=8192.
+ * ------------------------------------------------------------------ */
+
+/*
+ * Minimal CRC32C (Castagnoli) implementation for computing expected
+ * checksums in test records.  Mirrors the algorithm in wal_validator.c.
+ */
+static uint32_t
+test_crc32c(const uint8_t *buf, size_t len)
+{
+	static const uint32_t poly = 0x82F63B78U;
+	uint32_t crc = ~0U;
+	size_t i;
+	int j;
+
+	for (i = 0; i < len; i++)
+	{
+		crc ^= buf[i];
+		for (j = 0; j < 8; j++)
+			crc = (crc & 1) ? ((crc >> 1) ^ poly) : (crc >> 1);
+	}
+	return ~crc;
+}
+
+/*
+ * Write a WAL segment file to `path` consisting of a 40-byte long page
+ * header followed by `nrecs` minimal 24-byte XLogRecord entries.
+ *
+ * All header fields are chosen so that validate_wal_segment_header() passes
+ * (magic=0xD071, XLP_LONG_HEADER set, tli=1, pageaddr=0x1000000, etc.).
+ *
+ * For each record the CRC covers the 20 header bytes before xl_crc
+ * (bytes [0..19]).  If bad_crc_idx >= 0, the CRC of that record is
+ * intentionally corrupted with XOR 0xDEADBEEF.
+ *
+ * If zero_crc is true all xl_crc fields are written as 0 (synthetic WAL).
+ *
+ * If oversized is true, the first record's xl_tot_len is set to blcksz
+ * (8192), making it a multi-page record that must be skipped.
+ *
+ * bad_totlen_idx: if >= 0, that record's xl_tot_len is set to 10 (< 24),
+ * triggering the invalid-totlen path in validate_wal_segment_records.
+ * Set bad_totlen_idx > 0 so that record[0] (checked by validate_wal_segment_header)
+ * remains valid, allowing validate_wal_segment_records to be reached.
+ */
+static void
+write_rec_test_seg(const char *path, int nrecs, int bad_crc_idx, int bad_totlen_idx,
+				   bool zero_crc, bool oversized)
+{
+	FILE    *f;
+	uint8_t  hdr[40] = {0};
+	int      i;
+
+	/* --- long page header --- */
+	/* xlp_magic = 0xD071 (LE) */
+	hdr[0] = 0x71; hdr[1] = 0xD0;
+	/* xlp_info = 0x0002 (XLP_LONG_HEADER, LE) */
+	hdr[2] = 0x02; hdr[3] = 0x00;
+	/* xlp_tli = 1 (LE) */
+	hdr[4] = 0x01; hdr[5] = 0x00; hdr[6] = 0x00; hdr[7] = 0x00;
+	/* xlp_pageaddr = 0x0000000001000000 (LE) — start of segment 1 */
+	hdr[8]  = 0x00; hdr[9]  = 0x00; hdr[10] = 0x00; hdr[11] = 0x01;
+	hdr[12] = 0x00; hdr[13] = 0x00; hdr[14] = 0x00; hdr[15] = 0x00;
+	/* xlp_rem_len = 0 */
+	/* xlp_sysid = 1 (LE) */
+	hdr[24] = 0x01;
+	/* xlp_seg_size = 0x01000000 = 16 MB (LE) */
+	hdr[32] = 0x00; hdr[33] = 0x00; hdr[34] = 0x00; hdr[35] = 0x01;
+	/* xlp_xlog_blcksz = 8192 = 0x00002000 (LE) */
+	hdr[36] = 0x00; hdr[37] = 0x20; hdr[38] = 0x00; hdr[39] = 0x00;
+
+	f = fopen(path, "wb");
+	if (f == NULL)
+		return;
+
+	fwrite(hdr, 1, sizeof(hdr), f);
+
+	for (i = 0; i < nrecs; i++)
+	{
+		uint8_t  rec[24] = {0};
+		uint32_t tot_len;
+		uint32_t crc_val;
+
+		/* xl_tot_len at offset 0 */
+		if (oversized && i == 0)
+			tot_len = 8192;	  /* larger than a full page — multi-page record */
+		else if (bad_totlen_idx >= 0 && i == bad_totlen_idx)
+			tot_len = 10;	  /* less than sizeof(XLogRecord) — invalid */
+		else
+			tot_len = 24;	  /* minimal header-only record */
+
+		rec[0] = (uint8_t)(tot_len & 0xFF);
+		rec[1] = (uint8_t)((tot_len >> 8) & 0xFF);
+		rec[2] = (uint8_t)((tot_len >> 16) & 0xFF);
+		rec[3] = (uint8_t)((tot_len >> 24) & 0xFF);
+
+		/* xl_crc at offset 20 — compute over bytes [0..19] */
+		if (zero_crc)
+		{
+			crc_val = 0;
+		}
+		else
+		{
+			crc_val = test_crc32c(rec, 20);  /* rec[20..23] still 0 at this point */
+			if (i == bad_crc_idx)
+				crc_val ^= 0xDEADBEEF;
+		}
+
+		rec[20] = (uint8_t)(crc_val & 0xFF);
+		rec[21] = (uint8_t)((crc_val >> 8) & 0xFF);
+		rec[22] = (uint8_t)((crc_val >> 16) & 0xFF);
+		rec[23] = (uint8_t)((crc_val >> 24) & 0xFF);
+
+		fwrite(rec, 1, sizeof(rec), f);
+	}
+
+	fclose(f);
+}
+
+/*
+ * Common setup: create the archive dir in /tmp and return BackupInfo +
+ * WALArchiveInfo ready to be passed to check_wal_headers().
+ */
+static void
+rec_test_setup(char *dir_out, size_t dir_sz, BackupInfo *bi, WALArchiveInfo *wi)
+{
+	snprintf(dir_out, dir_sz, "/tmp/pg_wrcrc_%d", (int)getpid());
+	mkdir(dir_out, 0755);
+
+	memset(bi, 0, sizeof(*bi));
+	bi->timeline  = 1;
+	bi->start_lsn = 0x1000000;   /* segment 1 */
+	bi->stop_lsn  = 0x1000000;
+	strncpy(bi->backup_id, "RECTEST", sizeof(bi->backup_id) - 1);
+
+	memset(wi, 0, sizeof(*wi));
+	strncpy(wi->archive_path, dir_out, sizeof(wi->archive_path) - 1);
+}
+
+static void
+rec_test_teardown(const char *dir)
+{
+	char cmd[PATH_MAX + 8];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	(void)system(cmd);
+}
+
+/* All three records have correct CRCs → no errors */
+START_TEST(test_rec_crc_all_valid)
+{
+	char           dir[64];
+	char           seg[PATH_MAX];
+	BackupInfo     bi;
+	WALArchiveInfo wi;
+	ValidationResult *r;
+
+	rec_test_setup(dir, sizeof(dir), &bi, &wi);
+	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	write_rec_test_seg(seg, 3, -1, -1, false, false);
+
+	r = check_wal_headers(&bi, &wi);
+	rec_test_teardown(dir);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/* Record [1] has a corrupted CRC → exactly 1 error containing "CRC mismatch" */
+START_TEST(test_rec_crc_mismatch)
+{
+	char           dir[64];
+	char           seg[PATH_MAX];
+	BackupInfo     bi;
+	WALArchiveInfo wi;
+	ValidationResult *r;
+
+	rec_test_setup(dir, sizeof(dir), &bi, &wi);
+	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	write_rec_test_seg(seg, 3, 1, -1, false, false);
+
+	r = check_wal_headers(&bi, &wi);
+	rec_test_teardown(dir);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert(strstr(r->errors[0], "CRC mismatch") != NULL);
+	free_validation_result(r);
+}
+END_TEST
+
+/* Record [1] has xl_tot_len=10 (<24) → 1 error containing "invalid xl_tot_len".
+ * Record [0] must be valid so validate_wal_segment_header() passes and
+ * validate_wal_segment_records() is actually reached. */
+START_TEST(test_rec_crc_invalid_totlen)
+{
+	char           dir[64];
+	char           seg[PATH_MAX];
+	BackupInfo     bi;
+	WALArchiveInfo wi;
+	ValidationResult *r;
+
+	rec_test_setup(dir, sizeof(dir), &bi, &wi);
+	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	write_rec_test_seg(seg, 2, -1, 1, false, false);
+
+	r = check_wal_headers(&bi, &wi);
+	rec_test_teardown(dir);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert(strstr(r->errors[0], "invalid xl_tot_len") != NULL);
+	free_validation_result(r);
+}
+END_TEST
+
+/* Records with xl_crc=0 (synthetic WAL) → no errors */
+START_TEST(test_rec_crc_zero_skipped)
+{
+	char           dir[64];
+	char           seg[PATH_MAX];
+	BackupInfo     bi;
+	WALArchiveInfo wi;
+	ValidationResult *r;
+
+	rec_test_setup(dir, sizeof(dir), &bi, &wi);
+	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	write_rec_test_seg(seg, 3, -1, -1, true, false);
+
+	r = check_wal_headers(&bi, &wi);
+	rec_test_teardown(dir);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/* Record with xl_tot_len > page remainder → skipped silently, no error */
+START_TEST(test_rec_crc_multipage_skipped)
+{
+	char           dir[64];
+	char           seg[PATH_MAX];
+	BackupInfo     bi;
+	WALArchiveInfo wi;
+	ValidationResult *r;
+
+	rec_test_setup(dir, sizeof(dir), &bi, &wi);
+	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	write_rec_test_seg(seg, 1, -1, -1, false, true);
+
+	r = check_wal_headers(&bi, &wi);
+	rec_test_teardown(dir);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
 /*
  * Test Suite
  */
@@ -741,6 +1011,7 @@ wal_validator_suite(void)
 {
 	Suite *s;
 	TCase *tc_availability;
+	TCase *tc_rec_crc;
 	TCase *tc_integration;
 
 	s = suite_create("WAL Validator");
@@ -754,6 +1025,15 @@ wal_validator_suite(void)
 	tcase_add_test(tc_availability, test_check_wal_availability_gap);
 	tcase_add_test(tc_availability, test_check_wal_availability_empty_archive);
 	suite_add_tcase(s, tc_availability);
+
+	/* Per-record CRC unit tests */
+	tc_rec_crc = tcase_create("record_crc");
+	tcase_add_test(tc_rec_crc, test_rec_crc_all_valid);
+	tcase_add_test(tc_rec_crc, test_rec_crc_mismatch);
+	tcase_add_test(tc_rec_crc, test_rec_crc_invalid_totlen);
+	tcase_add_test(tc_rec_crc, test_rec_crc_zero_skipped);
+	tcase_add_test(tc_rec_crc, test_rec_crc_multipage_skipped);
+	suite_add_tcase(s, tc_rec_crc);
 
 	/* Integration tests with real pg_probackup backup */
 	tc_integration = tcase_create("Integration");

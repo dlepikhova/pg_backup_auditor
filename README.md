@@ -15,7 +15,7 @@ Cross-platform PostgreSQL backup auditor - unified analysis and validation tool 
 - Detailed backup info: timing, storage, PostgreSQL metadata (LSN, timeline, WAL)
 - Backup validation with 4 levels (basic → standard → checksums → full):
   - Level 2 (standard): metadata consistency — timestamps, LSN range, timeline, version
-  - Level 3 (checksums): WAL availability (all required segments present) + WAL header validation (magic, timeline, page address, segment size)
+  - Level 3 (checksums): WAL availability + continuity + timeline history + full WAL header and per-record CRC32C validation
 - Color output with `--no-color` option
 
 ## Quick Start
@@ -131,8 +131,15 @@ Options:
 | 4 | `full` | All checks + pg_verifybackup |
 
 **Level 3 WAL checks** (require `--wal-archive` or auto-detected for pg_probackup):
-- WAL availability: verifies every segment in the [start_lsn, stop_lsn] range exists
-- WAL header validation: reads `XLogLongPageHeaderData` from each segment and checks magic, `XLP_LONG_HEADER` flag, timeline, page address, and segment size
+- WAL availability: every segment in [start_lsn, stop_lsn] exists in the archive
+- WAL continuity: no gaps between consecutive segments in the archive
+- WAL timeline history: `.history` file present for timeline > 1
+- WAL header validation: reads `XLogLongPageHeaderData` (40 bytes) from each segment and verifies:
+  - non-zero magic, `XLP_LONG_HEADER` flag set
+  - timeline matches backup, page address matches segment start
+  - segment size is a valid power of two (1 MB – 1 GB), block size in [512, 65536]
+  - CRC32C of the first `XLogRecord`
+- WAL per-record CRC32C: reads the segment page by page and validates the CRC32C of every complete single-page `XLogRecord`; records that span a page boundary or have `xl_crc=0` (synthetic pg_probackup records) are intentionally skipped
 
 **Output**: per-backup results with [OK] / [WARNING] / [ERROR] labels, summary with Total / Validated / Skipped counts, and overall result (OK / WARNING / FAILED).
 
@@ -199,12 +206,12 @@ make run
 
 ### Test Coverage
 
-**Test suite**: 88 unit and integration tests (100% passing)
+**Test suite**: 130 unit and integration tests (100% passing)
 
-- **WAL validator**: availability, header validation (positive + 3 negative scenarios)
+- **WAL validator**: availability, continuity, timeline history, header validation, per-record CRC32C (valid / mismatch / invalid tot_len / zero CRC skipped / multi-page skipped)
 - **Adapters**: pg_basebackup, pg_probackup (scan, WAL path detection, end-to-end)
 - **Common utilities**: string_utils, xlog (LSN/segment parsing and formatting), INI parser
-- **Integration tests** with real pg_probackup backup catalog (skipped if not present)
+- **Integration tests** with synthetic pg_probackup backup catalog (auto-generated; skipped if env vars not set)
 
 ## Development
 
