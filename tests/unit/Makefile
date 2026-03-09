@@ -6,6 +6,13 @@ CFLAGS = -std=c11 -Wall -Wextra -Werror -g
 CFLAGS += -I../../include
 # Suppress warning from libcheck headers about GNU extensions
 CFLAGS += -Wno-gnu-zero-variadic-macro-arguments
+# GCC 14 -Wformat-truncation=2 warns when a string argument declared as
+# PATH_MAX is appended with a literal suffix that could hypothetically cause
+# truncation.  In test code all paths are /tmp/..._<pid>/... (~30 chars),
+# so no real truncation can occur.  Suppress the false positive here.
+# Only add the flag if the compiler supports it (GCC accepts it; Clang does
+# not and would reject it with -Werror,-Wunknown-warning-option).
+CFLAGS += $(shell $(CC) -Werror -Wno-format-truncation -x c /dev/null -c -o /dev/null 2>/dev/null && echo "-Wno-format-truncation")
 
 # Coverage support
 ifeq ($(COVERAGE),1)
