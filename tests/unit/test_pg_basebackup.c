@@ -28,11 +28,21 @@
 #include <unistd.h>
 #include "pg_backup_auditor.h"
 
-/* Test fixtures - temporary directories for testing */
-static char test_dir[PATH_MAX];
-static char plain_backup_dir[PATH_MAX];
-static char tar_backup_dir[PATH_MAX];
-static char invalid_backup_dir[PATH_MAX];
+/*
+ * Use bounded buffer sizes so GCC can prove at compile time that snprintf
+ * calls cannot truncate (-Wformat-truncation=2, -Werror on GCC 14+).
+ *
+ * test_dir is always "/tmp/pg_backup_test_<pid>" (~28 chars); 64 is ample.
+ * Subdirs add at most 13 chars ("/plain_backup"), so 128 suffices.
+ * GCC sees: 64+13=77 < 128, and 128+13=141 < PATH_MAX — no truncation.
+ */
+#define TEST_BASE_SIZE  64   /* /tmp/pg_backup_test_<pid>          */
+#define TEST_SUB_SIZE  128   /* base + /plain_backup (13 chars max) */
+
+static char test_dir[TEST_BASE_SIZE];
+static char plain_backup_dir[TEST_SUB_SIZE];
+static char tar_backup_dir[TEST_SUB_SIZE];
+static char invalid_backup_dir[TEST_SUB_SIZE];
 
 /* Setup: Create test directory structure */
 static void
