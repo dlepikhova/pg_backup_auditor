@@ -938,6 +938,84 @@ check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info)
 }
 
 /*
+ * Check WAL segment file headers for ALL segments in the archive.
+ *
+ * Unlike check_wal_headers() (which only validates segments within a specific
+ * backup's LSN window), this function iterates over every segment present in
+ * the archive and validates its page header.  It detects corruptions such as
+ * segment-file swaps, where the content of one segment ends up in another
+ * file — something that check_wal_headers() misses for segments that fall
+ * between backups.
+ *
+ * For each segment the expected page address is:
+ *   (log_id * 2^32 + seg_id) * 0x1000000
+ * using the hardcoded 16 MB segment size (see BUG-002).
+ *
+ * Per-record CRC validation is also run on each segment whose page header
+ * passes cleanly.
+ *
+ * NOTE: Uses hardcoded 16 MB (0x1000000) segment size — see BUG-002.
+ */
+ValidationResult*
+check_wal_archive_headers(WALArchiveInfo *wal_info)
+{
+	ValidationResult   *result;
+	int					i, checked = 0;
+	char				seg_filename[32];
+	char				seg_path[PATH_MAX];
+
+	if (wal_info == NULL)
+		return NULL;
+
+	result = calloc(1, sizeof(ValidationResult));
+	if (result == NULL)
+		return NULL;
+
+	result->status = BACKUP_STATUS_OK;
+
+	for (i = 0; i < wal_info->segment_count; i++)
+	{
+		WALSegmentName *seg = &wal_info->segments[i];
+
+		format_wal_filename(seg, seg_filename, sizeof(seg_filename));
+		path_join(seg_path, sizeof(seg_path),
+				  wal_info->archive_path, seg_filename);
+
+		if (!file_exists(seg_path))
+			continue;
+
+		uint64_t expected_pageaddr =
+			((uint64_t)seg->log_id * 0x100000000ULL + (uint64_t)seg->seg_id)
+			* (uint64_t)0x1000000;
+
+		int errors_before = result->error_count;
+
+		validate_wal_segment_header(seg_path, seg_filename,
+									seg->timeline, expected_pageaddr,
+									result);
+
+		/*
+		 * Only run per-record CRC validation when the page header is clean —
+		 * a corrupt header makes record offsets unreliable.
+		 */
+		if (result->error_count == errors_before)
+			validate_wal_segment_records(seg_path, seg_filename, result);
+
+		checked++;
+	}
+
+	if (result->error_count == 0)
+		log_info("WAL archive headers OK (%d segment%s checked)",
+				 checked, checked == 1 ? "" : "s");
+	else
+		log_error("WAL archive has %d header error%s (%d segment%s checked)",
+				  result->error_count, result->error_count == 1 ? "" : "s",
+				  checked, checked == 1 ? "" : "s");
+
+	return result;
+}
+
+/*
  * Check that a timeline history file exists in the WAL archive.
  *
  * For timeline 1 there is no history file, so the check is skipped.

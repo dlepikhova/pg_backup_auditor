@@ -467,6 +467,31 @@ cmd_check_main(int argc, char **argv)
 			total_errors += cont_result->error_count;
 			free_validation_result(cont_result);
 		}
+
+		/* Archive-wide header validation — catches segment swaps and other
+		 * corruptions in segments that lie between backups and are therefore
+		 * not covered by the per-backup check_wal_headers() pass. */
+		if (opts.level >= VALIDATION_LEVEL_FULL)
+		{
+			ValidationResult *arch_result = check_wal_archive_headers(wal_info);
+			if (arch_result != NULL)
+			{
+				if (arch_result->error_count > 0)
+				{
+					printf("  %s[ERROR]%s WAL archive header validation failed:\n",
+						   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
+					for (int i = 0; i < arch_result->error_count; i++)
+						printf("          %s\n", arch_result->errors[i]);
+				}
+				else
+				{
+					printf("  %s[OK]%s WAL archive: all segment headers valid\n",
+						   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
+				}
+				total_errors += arch_result->error_count;
+				free_validation_result(arch_result);
+			}
+		}
 	}
 
 	/* Print summary */

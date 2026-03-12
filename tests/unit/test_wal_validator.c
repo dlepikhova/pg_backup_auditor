@@ -1003,6 +1003,196 @@ START_TEST(test_rec_crc_multipage_skipped)
 }
 END_TEST
 
+/* -------------------------------------------------------------------------
+ * Tests for check_wal_archive_headers()
+ *
+ * These tests exercise the archive-wide header check introduced to fix
+ * BUG-003: segments that fall between backups are never reached by
+ * check_wal_headers(), so a segment swap among them goes undetected.
+ *
+ * check_wal_archive_headers() iterates every WALSegmentName in the
+ * WALArchiveInfo and validates each file's xlp_pageaddr against the
+ * segment number.
+ *
+ * Helper write_arch_test_seg() writes a 40-byte long page header with a
+ * configurable timeline and pageaddr, followed by one valid 24-byte record.
+ * ------------------------------------------------------------------------- */
+
+/*
+ * Write a minimal WAL segment to `path` with the given timeline and
+ * page address.  Used to test archive-wide header validation.
+ */
+static void
+write_arch_test_seg(const char *path, uint32_t tli, uint64_t pageaddr)
+{
+	FILE    *f;
+	uint8_t  hdr[40] = {0};
+	uint8_t  rec[24] = {0};
+	uint32_t crc_val;
+
+	/* xlp_magic = 0xD071 (LE) */
+	hdr[0] = 0x71; hdr[1] = 0xD0;
+	/* xlp_info = XLP_LONG_HEADER (LE) */
+	hdr[2] = 0x02; hdr[3] = 0x00;
+	/* xlp_tli (LE) */
+	hdr[4] = (uint8_t)(tli);
+	hdr[5] = (uint8_t)(tli >> 8);
+	hdr[6] = (uint8_t)(tli >> 16);
+	hdr[7] = (uint8_t)(tli >> 24);
+	/* xlp_pageaddr (LE) */
+	hdr[8]  = (uint8_t)(pageaddr);
+	hdr[9]  = (uint8_t)(pageaddr >> 8);
+	hdr[10] = (uint8_t)(pageaddr >> 16);
+	hdr[11] = (uint8_t)(pageaddr >> 24);
+	hdr[12] = (uint8_t)(pageaddr >> 32);
+	hdr[13] = (uint8_t)(pageaddr >> 40);
+	hdr[14] = (uint8_t)(pageaddr >> 48);
+	hdr[15] = (uint8_t)(pageaddr >> 56);
+	/* xlp_sysid = 1 */
+	hdr[24] = 0x01;
+	/* xlp_seg_size = 16 MB (LE) */
+	hdr[32] = 0x00; hdr[33] = 0x00; hdr[34] = 0x00; hdr[35] = 0x01;
+	/* xlp_xlog_blcksz = 8192 (LE) */
+	hdr[36] = 0x00; hdr[37] = 0x20; hdr[38] = 0x00; hdr[39] = 0x00;
+
+	f = fopen(path, "wb");
+	if (f == NULL)
+		return;
+	fwrite(hdr, 1, sizeof(hdr), f);
+
+	/* One valid 24-byte XLogRecord */
+	rec[0] = 24;	/* xl_tot_len */
+	crc_val = test_crc32c(rec, 20);
+	rec[20] = (uint8_t)(crc_val);
+	rec[21] = (uint8_t)(crc_val >> 8);
+	rec[22] = (uint8_t)(crc_val >> 16);
+	rec[23] = (uint8_t)(crc_val >> 24);
+	fwrite(rec, 1, sizeof(rec), f);
+
+	fclose(f);
+}
+
+/* NULL input → returns NULL */
+START_TEST(test_archive_headers_null)
+{
+	ValidationResult *r = check_wal_archive_headers(NULL);
+	ck_assert_ptr_null(r);
+}
+END_TEST
+
+/* Empty archive (0 segments) → OK, no errors */
+START_TEST(test_archive_headers_empty)
+{
+	char           dir[64];
+	WALArchiveInfo wi;
+	ValidationResult *r;
+
+	snprintf(dir, sizeof(dir), "/tmp/pg_warch_%d", (int)getpid());
+	mkdir(dir, 0755);
+	memset(&wi, 0, sizeof(wi));
+	strncpy(wi.archive_path, dir, sizeof(wi.archive_path) - 1);
+	wi.segment_count = 0;
+	wi.segments = NULL;
+
+	r = check_wal_archive_headers(&wi);
+
+	char cmd[80];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	(void)system(cmd);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/* Three segments with correct headers → 0 errors */
+START_TEST(test_archive_headers_all_valid)
+{
+	char           dir[64];
+	char           seg[PATH_MAX];
+	WALArchiveInfo wi;
+	ValidationResult *r;
+	WALSegmentName segs[3];
+
+	snprintf(dir, sizeof(dir), "/tmp/pg_warch_%d", (int)getpid());
+	mkdir(dir, 0755);
+
+	/* Segments 1, 2, 3 on timeline 1 */
+	for (int i = 0; i < 3; i++)
+	{
+		segs[i].timeline = 1;
+		segs[i].log_id   = 0;
+		segs[i].seg_id   = (uint32_t)(i + 1);
+
+		uint64_t pa = (uint64_t)(i + 1) * 0x1000000ULL;
+		snprintf(seg, sizeof(seg),
+				 "%s/0000000100000000%08X", dir, i + 1);
+		write_arch_test_seg(seg, 1, pa);
+	}
+
+	memset(&wi, 0, sizeof(wi));
+	strncpy(wi.archive_path, dir, sizeof(wi.archive_path) - 1);
+	wi.segment_count = 3;
+	wi.segments = segs;
+
+	r = check_wal_archive_headers(&wi);
+	wi.segments = NULL;	/* stack-allocated; don't free */
+
+	char cmd[80];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	(void)system(cmd);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * Segment file "000000010000000000000004" contains a header claiming
+ * xlp_pageaddr = 0x1000000 (segment 1's address).  This simulates a
+ * segment swap — the corruption that BUG-003 was about.
+ * Expected: exactly 1 error containing "page address mismatch".
+ */
+START_TEST(test_archive_headers_bad_pageaddr)
+{
+	char           dir[64];
+	char           seg[PATH_MAX];
+	WALArchiveInfo wi;
+	ValidationResult *r;
+	WALSegmentName segs[1];
+
+	snprintf(dir, sizeof(dir), "/tmp/pg_warch_%d", (int)getpid());
+	mkdir(dir, 0755);
+
+	/* File named segment 4 but header says pageaddr of segment 1 */
+	segs[0].timeline = 1;
+	segs[0].log_id   = 0;
+	segs[0].seg_id   = 4;
+
+	snprintf(seg, sizeof(seg), "%s/000000010000000000000004", dir);
+	write_arch_test_seg(seg, 1, 0x1000000ULL);	/* wrong: should be 0x4000000 */
+
+	memset(&wi, 0, sizeof(wi));
+	strncpy(wi.archive_path, dir, sizeof(wi.archive_path) - 1);
+	wi.segment_count = 1;
+	wi.segments = segs;
+
+	r = check_wal_archive_headers(&wi);
+	wi.segments = NULL;
+
+	char cmd[80];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	(void)system(cmd);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert(strstr(r->errors[0], "page address mismatch") != NULL);
+	free_validation_result(r);
+}
+END_TEST
+
 /*
  * Test Suite
  */
@@ -1012,6 +1202,7 @@ wal_validator_suite(void)
 	Suite *s;
 	TCase *tc_availability;
 	TCase *tc_rec_crc;
+	TCase *tc_arch_headers;
 	TCase *tc_integration;
 
 	s = suite_create("WAL Validator");
@@ -1034,6 +1225,14 @@ wal_validator_suite(void)
 	tcase_add_test(tc_rec_crc, test_rec_crc_zero_skipped);
 	tcase_add_test(tc_rec_crc, test_rec_crc_multipage_skipped);
 	suite_add_tcase(s, tc_rec_crc);
+
+	/* Archive-wide header validation unit tests (BUG-003 fix) */
+	tc_arch_headers = tcase_create("archive_headers");
+	tcase_add_test(tc_arch_headers, test_archive_headers_null);
+	tcase_add_test(tc_arch_headers, test_archive_headers_empty);
+	tcase_add_test(tc_arch_headers, test_archive_headers_all_valid);
+	tcase_add_test(tc_arch_headers, test_archive_headers_bad_pageaddr);
+	suite_add_tcase(s, tc_arch_headers);
 
 	/* Integration tests with real pg_probackup backup */
 	tc_integration = tcase_create("Integration");
