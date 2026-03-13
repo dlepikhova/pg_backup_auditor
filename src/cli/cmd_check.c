@@ -447,6 +447,25 @@ cmd_check_main(int argc, char **argv)
 		printf("WAL Archive\n");
 		printf("----------------------------------------------------\n");
 
+		ValidationResult *chain_result = check_wal_restore_chain(backups, wal_info);
+		if (chain_result != NULL)
+		{
+			if (chain_result->error_count > 0)
+			{
+				printf("  %s[ERROR]%s WAL restore chain incomplete:\n",
+					   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
+				for (int i = 0; i < chain_result->error_count; i++)
+					printf("          %s\n", chain_result->errors[i]);
+			}
+			else
+			{
+				printf("  %s[OK]%s WAL restore chain: all inter-backup bridges complete\n",
+					   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
+			}
+			total_errors += chain_result->error_count;
+			free_validation_result(chain_result);
+		}
+
 		ValidationResult *cont_result = check_wal_continuity(wal_info);
 		if (cont_result != NULL)
 		{

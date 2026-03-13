@@ -937,6 +937,159 @@ check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info)
 	return result;
 }
 
+/* -----------------------------------------------------------------------
+ * WAL restore-chain continuity
+ * ----------------------------------------------------------------------- */
+
+/*
+ * qsort comparator: sort BackupInfo pointers by (timeline, stop_lsn).
+ * Determines the order in which consecutive backups should be bridged.
+ */
+static int
+compare_backup_by_lsn(const void *a, const void *b)
+{
+	const BackupInfo *ba = *(const BackupInfo * const *)a;
+	const BackupInfo *bb = *(const BackupInfo * const *)b;
+
+	if (ba->timeline < bb->timeline) return -1;
+	if (ba->timeline > bb->timeline) return  1;
+	if (ba->stop_lsn < bb->stop_lsn) return -1;
+	if (ba->stop_lsn > bb->stop_lsn) return  1;
+	return 0;
+}
+
+/*
+ * Verify that WAL is continuously available between every pair of consecutive
+ * backups on the same timeline.
+ *
+ * For each consecutive pair (prev, next) sorted by (timeline, stop_lsn):
+ *   - Bridge range: segments [lsn_to_seg(prev.stop_lsn)+1,
+ *                              lsn_to_seg(next.start_lsn)-1]
+ *   - Every segment in this range must exist in the archive.
+ *
+ * The range is intentionally exclusive of both endpoints:
+ *   - prev's stop segment is already covered by check_wal_availability for prev.
+ *   - next's start segment is already covered by check_wal_availability for next.
+ *
+ * If bridge_start >= bridge_end the backups are adjacent or overlapping and no
+ * bridge check is needed.
+ *
+ * NOTE: Uses hardcoded 16 MB (0x1000000) segment size — see BUG-002.
+ */
+ValidationResult*
+check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
+{
+	ValidationResult   *result;
+	BackupInfo        **arr;
+	int					n, i;
+	int					chain_errors = 0;
+	char				msg[512];
+	char				lsn_a[32], lsn_b[32];
+
+	if (backups == NULL || wal_info == NULL)
+		return NULL;
+
+	result = calloc(1, sizeof(ValidationResult));
+	if (result == NULL)
+		return NULL;
+
+	result->status = BACKUP_STATUS_OK;
+
+	/* Count backups that have valid LSN information */
+	n = 0;
+	for (BackupInfo *b = backups; b != NULL; b = b->next)
+		if (b->start_lsn > 0 && b->stop_lsn > 0)
+			n++;
+
+	if (n < 2)
+	{
+		log_debug("WAL restore chain: fewer than 2 backups with LSN info — skipping");
+		return result;
+	}
+
+	arr = malloc((size_t)n * sizeof(*arr));
+	if (arr == NULL)
+		return result;
+
+	i = 0;
+	for (BackupInfo *b = backups; b != NULL; b = b->next)
+		if (b->start_lsn > 0 && b->stop_lsn > 0)
+			arr[i++] = b;
+
+	qsort(arr, (size_t)n, sizeof(*arr), compare_backup_by_lsn);
+
+	for (i = 0; i < n - 1; i++)
+	{
+		BackupInfo     *prev = arr[i];
+		BackupInfo     *next = arr[i + 1];
+		WALSegmentName	stop_seg, start_seg, cur;
+
+		/* Only check pairs on the same timeline */
+		if (prev->timeline != next->timeline)
+			continue;
+
+		lsn_to_seg(prev->stop_lsn,  prev->timeline, &stop_seg,  0x1000000);
+		lsn_to_seg(next->start_lsn, next->timeline, &start_seg, 0x1000000);
+
+		/*
+		 * Bridge starts one segment after prev's stop segment.
+		 * Bridge ends one segment before next's start segment.
+		 * If bridge_start >= start_seg the backups are adjacent — nothing
+		 * to bridge.
+		 */
+		cur = stop_seg;
+		cur.seg_id++;
+		if (cur.seg_id == 0)
+			cur.log_id++;
+
+		if (cur.log_id > start_seg.log_id ||
+			(cur.log_id == start_seg.log_id && cur.seg_id >= start_seg.seg_id))
+			continue;	/* adjacent or overlapping — no bridge gap possible */
+
+		/* Iterate over bridge range and report any missing segment */
+		while (cur.log_id < start_seg.log_id ||
+			   (cur.log_id == start_seg.log_id && cur.seg_id < start_seg.seg_id))
+		{
+			if (!segment_exists_in_archive(&cur, wal_info))
+			{
+				char seg_filename[32];
+
+				format_wal_filename(&cur, seg_filename, sizeof(seg_filename));
+				format_lsn(prev->stop_lsn,  lsn_a, sizeof(lsn_a));
+				format_lsn(next->start_lsn, lsn_b, sizeof(lsn_b));
+
+				snprintf(msg, sizeof(msg),
+						 "WAL chain broken: backup %s (stop=%s) → %s (start=%s): "
+						 "missing bridge segment %s",
+						 prev->backup_id, lsn_a,
+						 next->backup_id, lsn_b,
+						 seg_filename);
+				add_error(result, msg);
+				chain_errors++;
+			}
+
+			cur.seg_id++;
+			if (cur.seg_id == 0)
+				cur.log_id++;
+
+			/* Safety: prevent runaway loop on malformed input */
+			if (cur.log_id > start_seg.log_id + 1)
+				break;
+		}
+	}
+
+	free(arr);
+
+	if (chain_errors == 0)
+		log_info("WAL restore chain: all inter-backup bridges complete "
+				 "(%d backup%s checked)", n, n == 1 ? "" : "s");
+	else
+		log_error("WAL restore chain: %d missing segment%s break the recovery chain",
+				  chain_errors, chain_errors == 1 ? "" : "s");
+
+	return result;
+}
+
 /*
  * Check WAL segment file headers for ALL segments in the archive.
  *

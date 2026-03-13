@@ -1193,6 +1193,204 @@ START_TEST(test_archive_headers_bad_pageaddr)
 }
 END_TEST
 
+/* -------------------------------------------------------------------------
+ * Tests for check_wal_restore_chain()
+ *
+ * check_wal_restore_chain() verifies that WAL is continuously available
+ * between every consecutive pair of backups on the same timeline.
+ * The "bridge" between backup A and backup B is the set of WAL segments
+ * in the range [lsn_to_seg(A.stop_lsn)+1, lsn_to_seg(B.start_lsn)-1].
+ * If any bridge segment is absent from the archive an error is reported.
+ *
+ * These tests use in-memory WALArchiveInfo (no real files needed —
+ * segment_exists_in_archive() checks the segments[] array, not the fs).
+ * BackupInfo nodes are heap-allocated and freed by free_chain() below.
+ * ------------------------------------------------------------------------- */
+
+/* Helper: build a heap-allocated BackupInfo linked list node. */
+static BackupInfo *
+make_backup_node(const char *id, uint32_t tli,
+				 uint64_t start_lsn, uint64_t stop_lsn,
+				 BackupInfo *next)
+{
+	BackupInfo *b = calloc(1, sizeof(BackupInfo));
+
+	strncpy(b->backup_id, id, sizeof(b->backup_id) - 1);
+	b->timeline  = tli;
+	b->start_lsn = start_lsn;
+	b->stop_lsn  = stop_lsn;
+	b->status    = BACKUP_STATUS_OK;
+	b->next      = next;
+	return b;
+}
+
+/* Helper: free a BackupInfo linked list. */
+static void
+free_chain(BackupInfo *head)
+{
+	while (head)
+	{
+		BackupInfo *next = head->next;
+		free(head);
+		head = next;
+	}
+}
+
+/*
+ * Helper: build an in-memory WALArchiveInfo for the given segment IDs on
+ * timeline tli.  segments[] is heap-allocated; caller frees it or passes
+ * NULL archive_path (unused by check_wal_restore_chain — it only consults
+ * the segments[] array via segment_exists_in_archive()).
+ */
+static void
+build_archive(WALArchiveInfo *wi, uint32_t tli,
+			  const uint32_t *seg_ids, int nseg)
+{
+	memset(wi, 0, sizeof(*wi));
+	wi->segment_count = nseg;
+	wi->segments      = calloc((size_t)nseg, sizeof(WALSegmentName));
+	for (int i = 0; i < nseg; i++)
+	{
+		wi->segments[i].timeline = tli;
+		wi->segments[i].log_id   = 0;
+		wi->segments[i].seg_id   = seg_ids[i];
+	}
+}
+
+/* NULL backups → returns NULL */
+START_TEST(test_chain_null_backups)
+{
+	WALArchiveInfo wi;
+	build_archive(&wi, 1, NULL, 0);
+
+	ValidationResult *r = check_wal_restore_chain(NULL, &wi);
+	free(wi.segments);
+	ck_assert_ptr_null(r);
+}
+END_TEST
+
+/* NULL archive → returns NULL */
+START_TEST(test_chain_null_archive)
+{
+	BackupInfo *b = make_backup_node("B1", 1, 0x1000000, 0x3000000, NULL);
+
+	ValidationResult *r = check_wal_restore_chain(b, NULL);
+	free_chain(b);
+	ck_assert_ptr_null(r);
+}
+END_TEST
+
+/* Single backup — no pair to check → OK */
+START_TEST(test_chain_single_backup)
+{
+	BackupInfo     *b = make_backup_node("B1", 1, 0x1000000, 0x3000000, NULL);
+	WALArchiveInfo  wi;
+	const uint32_t  segs[] = {1, 2, 3};
+	build_archive(&wi, 1, segs, 3);
+
+	ValidationResult *r = check_wal_restore_chain(b, &wi);
+	free(wi.segments);
+	free_chain(b);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * Two backups, adjacent: B1 ends at seg 3, B2 starts at seg 4.
+ * Bridge = [4, 3] = empty → no missing segments, OK.
+ */
+START_TEST(test_chain_adjacent_backups)
+{
+	/* B2 is the newer backup (higher LSN); linked list order doesn't matter
+	 * because check_wal_restore_chain sorts internally. */
+	BackupInfo     *b2 = make_backup_node("B2", 1, 0x4000000, 0x6000000, NULL);
+	BackupInfo     *b1 = make_backup_node("B1", 1, 0x1000000, 0x3000000, b2);
+	WALArchiveInfo  wi;
+	const uint32_t  segs[] = {1, 2, 3, 4, 5, 6};
+	build_archive(&wi, 1, segs, 6);
+
+	ValidationResult *r = check_wal_restore_chain(b1, &wi);
+	free(wi.segments);
+	free_chain(b1);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * Two backups with a gap between them; all bridge segments present.
+ * B1: segs 1-3  B2: segs 8-10  Bridge: segs 4-7 (all in archive) → OK.
+ */
+START_TEST(test_chain_complete_bridge)
+{
+	BackupInfo     *b2 = make_backup_node("B2", 1, 0x8000000, 0xA000000, NULL);
+	BackupInfo     *b1 = make_backup_node("B1", 1, 0x1000000, 0x3000000, b2);
+	WALArchiveInfo  wi;
+	const uint32_t  segs[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+	build_archive(&wi, 1, segs, 10);
+
+	ValidationResult *r = check_wal_restore_chain(b1, &wi);
+	free(wi.segments);
+	free_chain(b1);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * Same setup but segments 5 and 6 are missing from the archive.
+ * Expected: 2 errors, each mentioning "chain broken" and the backup IDs.
+ */
+START_TEST(test_chain_missing_bridge)
+{
+	BackupInfo     *b2 = make_backup_node("B2", 1, 0x8000000, 0xA000000, NULL);
+	BackupInfo     *b1 = make_backup_node("B1", 1, 0x1000000, 0x3000000, b2);
+	WALArchiveInfo  wi;
+	/* Archive missing segments 5 and 6 */
+	const uint32_t  segs[] = {1, 2, 3, 4, 7, 8, 9, 10};
+	build_archive(&wi, 1, segs, 8);
+
+	ValidationResult *r = check_wal_restore_chain(b1, &wi);
+	free(wi.segments);
+	free_chain(b1);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 2);
+	ck_assert(strstr(r->errors[0], "chain broken") != NULL);
+	ck_assert(strstr(r->errors[0], "B1") != NULL);
+	ck_assert(strstr(r->errors[0], "B2") != NULL);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * Two backups on different timelines — no cross-timeline bridge check.
+ * The archive has no segments at all; should still be OK.
+ */
+START_TEST(test_chain_different_timelines)
+{
+	BackupInfo     *b2 = make_backup_node("B2", 2, 0x1000000, 0x3000000, NULL);
+	BackupInfo     *b1 = make_backup_node("B1", 1, 0x1000000, 0x3000000, b2);
+	WALArchiveInfo  wi;
+	build_archive(&wi, 1, NULL, 0);
+
+	ValidationResult *r = check_wal_restore_chain(b1, &wi);
+	free(wi.segments);
+	free_chain(b1);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
 /*
  * Test Suite
  */
@@ -1203,6 +1401,7 @@ wal_validator_suite(void)
 	TCase *tc_availability;
 	TCase *tc_rec_crc;
 	TCase *tc_arch_headers;
+	TCase *tc_restore_chain;
 	TCase *tc_integration;
 
 	s = suite_create("WAL Validator");
@@ -1233,6 +1432,17 @@ wal_validator_suite(void)
 	tcase_add_test(tc_arch_headers, test_archive_headers_all_valid);
 	tcase_add_test(tc_arch_headers, test_archive_headers_bad_pageaddr);
 	suite_add_tcase(s, tc_arch_headers);
+
+	/* Restore-chain WAL continuity unit tests */
+	tc_restore_chain = tcase_create("restore_chain");
+	tcase_add_test(tc_restore_chain, test_chain_null_backups);
+	tcase_add_test(tc_restore_chain, test_chain_null_archive);
+	tcase_add_test(tc_restore_chain, test_chain_single_backup);
+	tcase_add_test(tc_restore_chain, test_chain_adjacent_backups);
+	tcase_add_test(tc_restore_chain, test_chain_complete_bridge);
+	tcase_add_test(tc_restore_chain, test_chain_missing_bridge);
+	tcase_add_test(tc_restore_chain, test_chain_different_timelines);
+	suite_add_tcase(s, tc_restore_chain);
 
 	/* Integration tests with real pg_probackup backup */
 	tc_integration = tcase_create("Integration");
