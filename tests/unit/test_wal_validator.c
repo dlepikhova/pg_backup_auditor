@@ -1394,6 +1394,31 @@ START_TEST(test_chain_adjacent_backups)
 END_TEST
 
 /*
+ * B1 is OK, B2 is ORPHAN.  Archive is missing bridge segments 4-7.
+ * B2 must be excluded from the chain check → 0 errors.
+ */
+START_TEST(test_chain_orphan_skipped)
+{
+	BackupInfo     *b2 = make_backup_node("B2", 1, 0x8000000, 0xA000000, NULL);
+	BackupInfo     *b1 = make_backup_node("B1", 1, 0x1000000, 0x3000000, b2);
+	WALArchiveInfo  wi;
+	/* Bridge segments 4-7 absent — would produce 4 errors if B2 were included */
+	const uint32_t  segs[] = {1, 2, 3, 8, 9, 10};
+
+	b2->status = BACKUP_STATUS_ORPHAN;
+	build_archive(&wi, 1, segs, 6);
+
+	ValidationResult *r = check_wal_restore_chain(b1, &wi);
+	free(wi.segments);
+	free_chain(b1);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
  * Two backups with a gap between them; all bridge segments present.
  * B1: segs 1-3  B2: segs 8-10  Bridge: segs 4-7 (all in archive) → OK.
  */
@@ -1755,6 +1780,7 @@ wal_validator_suite(void)
 	tcase_add_test(tc_restore_chain, test_chain_null_archive);
 	tcase_add_test(tc_restore_chain, test_chain_single_backup);
 	tcase_add_test(tc_restore_chain, test_chain_adjacent_backups);
+	tcase_add_test(tc_restore_chain, test_chain_orphan_skipped);
 	tcase_add_test(tc_restore_chain, test_chain_complete_bridge);
 	tcase_add_test(tc_restore_chain, test_chain_missing_bridge);
 	tcase_add_test(tc_restore_chain, test_chain_different_timelines);

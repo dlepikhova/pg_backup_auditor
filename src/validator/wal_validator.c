@@ -345,7 +345,19 @@ validate_wal_segment_header(const char *seg_path,
 		const uint8_t *rec      = buf + WAL_RECORD_OFFSET;
 		uint32_t       xl_tot_len = read_u32le(rec, WAL_XLOG_OFF_TOTLEN);
 
-		if (xl_tot_len < (uint32_t) WAL_XLOG_HDR_SIZE)
+		if (xl_tot_len == 0)
+		{
+			/*
+			 * Zero xl_tot_len means the page tail is zero-filled: the segment
+			 * is either pre-allocated but not yet written (valid for the
+			 * current segment in pg_wal) or the archive contains only a page
+			 * header with no records.  Not an error; validate_wal_segment_records
+			 * will iterate through pages and find nothing to check.
+			 */
+			log_debug("WAL segment %s: first page zero-filled (no records)",
+					  seg_filename);
+		}
+		else if (xl_tot_len < (uint32_t) WAL_XLOG_HDR_SIZE)
 		{
 			snprintf(msg, sizeof(msg),
 					 "WAL segment %s: first XLogRecord has implausible "
@@ -1105,15 +1117,21 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
 
 	result->status = BACKUP_STATUS_OK;
 
-	/* Count backups that have valid LSN information */
+	/*
+	 * Count backups eligible for chain checking: must have valid LSN info
+	 * and must not be ORPHAN.  Orphan backups have a broken chain by
+	 * definition (their parent is gone), so including them would generate
+	 * spurious bridge errors for every gap left by the missing parent.
+	 */
 	n = 0;
 	for (BackupInfo *b = backups; b != NULL; b = b->next)
-		if (b->start_lsn > 0 && b->stop_lsn > 0)
+		if (b->start_lsn > 0 && b->stop_lsn > 0 &&
+			b->status != BACKUP_STATUS_ORPHAN)
 			n++;
 
 	if (n < 2)
 	{
-		log_debug("WAL restore chain: fewer than 2 backups with LSN info — skipping");
+		log_debug("WAL restore chain: fewer than 2 eligible backups — skipping");
 		return result;
 	}
 
@@ -1123,7 +1141,8 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
 
 	i = 0;
 	for (BackupInfo *b = backups; b != NULL; b = b->next)
-		if (b->start_lsn > 0 && b->stop_lsn > 0)
+		if (b->start_lsn > 0 && b->stop_lsn > 0 &&
+			b->status != BACKUP_STATUS_ORPHAN)
 			arr[i++] = b;
 
 	qsort(arr, (size_t)n, sizeof(*arr), compare_backup_by_lsn);

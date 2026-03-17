@@ -15,7 +15,7 @@ Creates the following layout:
                     database/          <- required by pg_probackup_detect()
         wal/
             testinstance/
-                000000010000000000000001   (40-byte WAL header)
+                000000010000000000000001   (16 MB sparse file, 40-byte WAL header)
                 000000010000000000000002
                 ...
                 000000010000000000000010  (hex A)
@@ -126,16 +126,22 @@ def create(base_dir):
         fh.write(control)
 
     # --- WAL segments (START_SEG .. STOP_SEG inclusive) ---
+    # Each segment is a sparse file of SEG_SIZE bytes (16 MB) with only the
+    # 40-byte long page header written at offset 0.  A sparse file consumes
+    # minimal disk space while satisfying the truncation check in
+    # validate_wal_segment_header() which requires file size == xlp_seg_size.
     for seg_id in range(START_SEG, STOP_SEG + 1):
         path = os.path.join(wal_dir, seg_filename(TIMELINE, seg_id))
         with open(path, 'wb') as fh:
             fh.write(wal_header(seg_id))
+            fh.seek(SEG_SIZE - 1)
+            fh.write(b'\x00')
 
     print(f'Catalog created: {base_dir}')
     print(f'  backup : {backup_dir}')
     print(f'  wal    : {wal_dir}')
     print(f'  segments: {START_SEG}..{STOP_SEG} '
-          f'({STOP_SEG - START_SEG + 1} files, each 40 bytes)')
+          f'({STOP_SEG - START_SEG + 1} sparse files, each {SEG_SIZE // (1024*1024)} MB)')
 
 
 # ------------------------------------------------------------------ #
