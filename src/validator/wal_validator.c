@@ -282,6 +282,36 @@ validate_wal_segment_header(const char *seg_path,
 		ok = false;
 	}
 
+	/*
+	 * File size must equal the segment size declared in the header.
+	 *
+	 * We only do this check when xlp_seg_size itself is valid (power-of-two,
+	 * 1 MB–1 GB), so we never chase a corrupt value.  Any segment in a
+	 * proper archive must be complete; a truncated file cannot be replayed
+	 * past the point of truncation.
+	 *
+	 * NOTE: The current segment in a live pg_wal directory is being written
+	 * to and will be smaller than xlp_seg_size.  Archives should only contain
+	 * completed segments, so truncation is an error in that context.
+	 */
+	if (xlp_seg_size != 0 &&
+		(xlp_seg_size & (xlp_seg_size - 1)) == 0 &&
+		xlp_seg_size >= (1U << 20) &&
+		xlp_seg_size <= (1U << 30))
+	{
+		off_t actual_size = get_file_size(seg_path);
+
+		if (actual_size >= 0 && (uint64_t)actual_size < (uint64_t)xlp_seg_size)
+		{
+			snprintf(msg, sizeof(msg),
+					 "WAL segment %s: truncated "
+					 "(%lld bytes, expected %u per header)",
+					 seg_filename, (long long)actual_size, xlp_seg_size);
+			add_error(result, msg);
+			ok = false;
+		}
+	}
+
 	/* Block size must be a power of two in [512, 65536] */
 	if (xlp_xlog_blcksz == 0 ||
 		(xlp_xlog_blcksz & (xlp_xlog_blcksz - 1)) != 0 ||
@@ -942,6 +972,86 @@ check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info)
  * ----------------------------------------------------------------------- */
 
 /*
+ * Parse a PostgreSQL timeline history file and return the switch LSN at which
+ * the given parent_tli transitioned to new_tli.
+ *
+ * History file: NNNNNNNN.history in the WAL archive.
+ * Non-comment lines: <parent_tli><whitespace><switch_lsn><whitespace><reason>
+ * Example: "1\t0/5000000\tno recovery target specified\n"
+ *
+ * Returns true and sets *switch_lsn_out if the entry is found, false if the
+ * file is absent or the parent timeline entry is missing / unparseable.
+ */
+static bool
+parse_history_switchpoint(const char *archive_path, uint32_t new_tli,
+						  uint32_t parent_tli, XLogRecPtr *switch_lsn_out)
+{
+	char   history_filename[32];
+	char   history_path[PATH_MAX];
+	FILE  *fp;
+	char   line[256];
+
+	snprintf(history_filename, sizeof(history_filename),
+			 "%08X.history", new_tli);
+	path_join(history_path, sizeof(history_path),
+			  archive_path, history_filename);
+
+	fp = fopen(history_path, "r");
+	if (fp == NULL)
+		return false;
+
+	while (fgets(line, sizeof(line), fp) != NULL)
+	{
+		char         *p = line;
+		char         *end;
+		unsigned long tli_val;
+		char          lsn_buf[32];
+		size_t        lsn_len;
+
+		/* Skip leading whitespace */
+		while (*p == ' ' || *p == '\t') p++;
+
+		/* Skip comment / blank lines */
+		if (*p == '#' || *p == '\n' || *p == '\r' || *p == '\0')
+			continue;
+
+		/* Parse parent timeline number */
+		tli_val = strtoul(p, &end, 10);
+		if (end == p)
+			continue;	/* no digits — malformed line */
+
+		if ((uint32_t)tli_val != parent_tli)
+			continue;
+
+		/* Skip whitespace between tli and LSN */
+		p = end;
+		while (*p == ' ' || *p == '\t') p++;
+
+		/* Extract the LSN token (non-whitespace, non-newline chars) */
+		end = p;
+		while (*end && *end != ' ' && *end != '\t' &&
+			   *end != '\n' && *end != '\r')
+			end++;
+
+		lsn_len = (size_t)(end - p);
+		if (lsn_len == 0 || lsn_len >= sizeof(lsn_buf))
+			continue;
+
+		memcpy(lsn_buf, p, lsn_len);
+		lsn_buf[lsn_len] = '\0';
+
+		if (parse_lsn(lsn_buf, switch_lsn_out))
+		{
+			fclose(fp);
+			return true;
+		}
+	}
+
+	fclose(fp);
+	return false;
+}
+
+/*
  * qsort comparator: sort BackupInfo pointers by (timeline, stop_lsn).
  * Determines the order in which consecutive backups should be bridged.
  */
@@ -1024,9 +1134,107 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
 		BackupInfo     *next = arr[i + 1];
 		WALSegmentName	stop_seg, start_seg, cur;
 
-		/* Only check pairs on the same timeline */
 		if (prev->timeline != next->timeline)
+		{
+			/*
+			 * Cross-timeline bridge: to recover from prev (on tli A) to
+			 * next (on tli B) we need:
+			 *  1. WAL on tli A from prev.stop_lsn to the switch point
+			 *     (pre-switch bridge).
+			 *  2. WAL on tli B from the switch point to next.start_lsn
+			 *     (post-switch bridge; may be empty).
+			 *
+			 * The switch LSN is read from next->timeline's history file.
+			 */
+			XLogRecPtr		switch_lsn;
+			WALSegmentName	prev_stop_seg, switch_seg_old, switch_seg_new,
+							next_start_seg, bridge_cur;
+			char			lsn_sw[32];
+
+			if (!parse_history_switchpoint(wal_info->archive_path,
+										  next->timeline, prev->timeline,
+										  &switch_lsn))
+			{
+				snprintf(msg, sizeof(msg),
+						 "WAL cross-timeline chain: cannot determine switch "
+						 "point tli=%u → tli=%u: %08X.history missing or "
+						 "entry for tli=%u not found",
+						 prev->timeline, next->timeline,
+						 next->timeline, prev->timeline);
+				add_error(result, msg);
+				chain_errors++;
+				continue;
+			}
+
+			format_lsn(switch_lsn, lsn_sw, sizeof(lsn_sw));
+			lsn_to_seg(prev->stop_lsn,  prev->timeline, &prev_stop_seg,  0x1000000);
+			lsn_to_seg(switch_lsn,      prev->timeline, &switch_seg_old, 0x1000000);
+			lsn_to_seg(switch_lsn,      next->timeline, &switch_seg_new, 0x1000000);
+			lsn_to_seg(next->start_lsn, next->timeline, &next_start_seg, 0x1000000);
+
+			/* --- 1. Pre-switch bridge on prev->timeline ---
+			 * Range: [prev_stop_seg+1, switch_seg_old]  (inclusive) */
+			bridge_cur = prev_stop_seg;
+			bridge_cur.seg_id++;
+			if (bridge_cur.seg_id == 0) bridge_cur.log_id++;
+
+			while (bridge_cur.log_id < switch_seg_old.log_id ||
+				   (bridge_cur.log_id == switch_seg_old.log_id &&
+					bridge_cur.seg_id <= switch_seg_old.seg_id))
+			{
+				if (!segment_exists_in_archive(&bridge_cur, wal_info))
+				{
+					char seg_fname[32];
+					format_wal_filename(&bridge_cur, seg_fname, sizeof(seg_fname));
+					format_lsn(prev->stop_lsn, lsn_a, sizeof(lsn_a));
+					snprintf(msg, sizeof(msg),
+							 "WAL cross-timeline chain broken: backup %s "
+							 "(tli=%u, stop=%s) → %s (tli=%u): "
+							 "missing pre-switch segment %s (switch at %s)",
+							 prev->backup_id, prev->timeline, lsn_a,
+							 next->backup_id, next->timeline,
+							 seg_fname, lsn_sw);
+					add_error(result, msg);
+					chain_errors++;
+				}
+				bridge_cur.seg_id++;
+				if (bridge_cur.seg_id == 0) bridge_cur.log_id++;
+				if (bridge_cur.log_id > switch_seg_old.log_id + 1) break;
+			}
+
+			/* --- 2. Post-switch bridge on next->timeline ---
+			 * Range: [switch_seg_new+1, next_start_seg-1]  (exclusive next.start)
+			 * Empty when switch and next.start fall in the same or adjacent
+			 * segment. */
+			bridge_cur = switch_seg_new;
+			bridge_cur.seg_id++;
+			if (bridge_cur.seg_id == 0) bridge_cur.log_id++;
+
+			while (bridge_cur.log_id < next_start_seg.log_id ||
+				   (bridge_cur.log_id == next_start_seg.log_id &&
+					bridge_cur.seg_id < next_start_seg.seg_id))
+			{
+				if (!segment_exists_in_archive(&bridge_cur, wal_info))
+				{
+					char seg_fname[32];
+					format_wal_filename(&bridge_cur, seg_fname, sizeof(seg_fname));
+					format_lsn(next->start_lsn, lsn_b, sizeof(lsn_b));
+					snprintf(msg, sizeof(msg),
+							 "WAL cross-timeline chain broken: backup %s "
+							 "(tli=%u, start=%s): missing post-switch segment "
+							 "%s on tli=%u (switch at %s)",
+							 next->backup_id, next->timeline, lsn_b,
+							 seg_fname, next->timeline, lsn_sw);
+					add_error(result, msg);
+					chain_errors++;
+				}
+				bridge_cur.seg_id++;
+				if (bridge_cur.seg_id == 0) bridge_cur.log_id++;
+				if (bridge_cur.log_id > next_start_seg.log_id + 1) break;
+			}
+
 			continue;
+		}
 
 		lsn_to_seg(prev->stop_lsn,  prev->timeline, &stop_seg,  0x1000000);
 		lsn_to_seg(next->start_lsn, next->timeline, &start_seg, 0x1000000);

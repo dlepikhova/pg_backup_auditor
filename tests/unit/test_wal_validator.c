@@ -858,6 +858,15 @@ write_rec_test_seg(const char *path, int nrecs, int bad_crc_idx, int bad_totlen_
 		fwrite(rec, 1, sizeof(rec), f);
 	}
 
+	/*
+	 * Extend the file to the full segment size (16 MB) declared in the header.
+	 * A seek to the last byte + one-byte write creates a sparse file on APFS /
+	 * ext4, so no 16 MB of disk is actually allocated.  This satisfies the
+	 * segment-size check in validate_wal_segment_header().
+	 */
+	(void)fseek(f, (long)0x1000000 - 1, SEEK_SET);
+	(void)fputc('\0', f);
+
 	fclose(f);
 }
 
@@ -1069,6 +1078,10 @@ write_arch_test_seg(const char *path, uint32_t tli, uint64_t pageaddr)
 	rec[23] = (uint8_t)(crc_val >> 24);
 	fwrite(rec, 1, sizeof(rec), f);
 
+	/* Extend to full 16 MB (sparse file: no actual disk allocation for gap) */
+	(void)fseek(f, (long)0x1000000 - 1, SEEK_SET);
+	(void)fputc('\0', f);
+
 	fclose(f);
 }
 
@@ -1189,6 +1202,64 @@ START_TEST(test_archive_headers_bad_pageaddr)
 	ck_assert_ptr_nonnull(r);
 	ck_assert_int_eq(r->error_count, 1);
 	ck_assert(strstr(r->errors[0], "page address mismatch") != NULL);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * Segment file has a valid 40-byte header (xlp_seg_size=16MB) but the file
+ * is only 64 bytes.  Expected: 1 error containing "truncated".
+ */
+START_TEST(test_archive_headers_truncated)
+{
+	char           dir[64];
+	char           seg_path[PATH_MAX];
+	WALArchiveInfo wi;
+	ValidationResult *r;
+	WALSegmentName segs[1];
+	FILE          *f;
+	uint8_t        hdr[40] = {0};
+
+	snprintf(dir, sizeof(dir), "/tmp/pg_warch_%d", (int)getpid());
+	mkdir(dir, 0755);
+
+	segs[0].timeline = 1;
+	segs[0].log_id   = 0;
+	segs[0].seg_id   = 1;
+
+	snprintf(seg_path, sizeof(seg_path), "%s/000000010000000000000001", dir);
+
+	/* Write a valid header with xlp_seg_size=16MB, but do NOT extend to 16MB */
+	hdr[0] = 0x71; hdr[1] = 0xD0;          /* xlp_magic */
+	hdr[2] = 0x02; hdr[3] = 0x00;          /* xlp_info = XLP_LONG_HEADER */
+	hdr[4] = 0x01;                          /* xlp_tli = 1 */
+	hdr[8] = 0x00; hdr[9] = 0x00;          /* xlp_pageaddr = 0x1000000 */
+	hdr[10] = 0x00; hdr[11] = 0x01;
+	hdr[24] = 0x01;                         /* xlp_sysid = 1 */
+	hdr[32] = 0x00; hdr[33] = 0x00;        /* xlp_seg_size = 16MB */
+	hdr[34] = 0x00; hdr[35] = 0x01;
+	hdr[36] = 0x00; hdr[37] = 0x20;        /* xlp_xlog_blcksz = 8192 */
+
+	f = fopen(seg_path, "wb");
+	ck_assert_ptr_nonnull(f);
+	fwrite(hdr, 1, sizeof(hdr), f);
+	fclose(f);                              /* file is 40 bytes — truncated */
+
+	memset(&wi, 0, sizeof(wi));
+	strncpy(wi.archive_path, dir, sizeof(wi.archive_path) - 1);
+	wi.segment_count = 1;
+	wi.segments = segs;
+
+	r = check_wal_archive_headers(&wi);
+	wi.segments = NULL;
+
+	char cmd[80];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	(void)system(cmd);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert(strstr(r->errors[0], "truncated") != NULL);
 	free_validation_result(r);
 }
 END_TEST
@@ -1371,19 +1442,262 @@ START_TEST(test_chain_missing_bridge)
 END_TEST
 
 /*
- * Two backups on different timelines — no cross-timeline bridge check.
- * The archive has no segments at all; should still be OK.
+ * Two backups on different timelines; no history file in the archive.
+ * check_wal_restore_chain() now attempts to read the history file to find
+ * the switch LSN.  Without the file it reports 1 error ("cross-timeline …
+ * missing or entry … not found").
  */
 START_TEST(test_chain_different_timelines)
 {
 	BackupInfo     *b2 = make_backup_node("B2", 2, 0x1000000, 0x3000000, NULL);
 	BackupInfo     *b1 = make_backup_node("B1", 1, 0x1000000, 0x3000000, b2);
 	WALArchiveInfo  wi;
-	build_archive(&wi, 1, NULL, 0);
+	build_archive(&wi, 1, NULL, 0);	/* archive_path is empty — no history file */
 
 	ValidationResult *r = check_wal_restore_chain(b1, &wi);
 	free(wi.segments);
 	free_chain(b1);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert(strstr(r->errors[0], "cross-timeline") != NULL);
+	free_validation_result(r);
+}
+END_TEST
+
+/* -------------------------------------------------------------------------
+ * Tests for cross-timeline WAL chain validation
+ *
+ * When backup A is on tli=1 and backup B is on tli=2, recovery from A to B
+ * requires:
+ *   1. WAL on tli=1 from A.stop_lsn to the timeline switch point
+ *      (pre-switch bridge).
+ *   2. WAL on tli=2 from the switch point to B.start_lsn
+ *      (post-switch bridge; may be empty).
+ *
+ * The switch LSN comes from the NNNNNNNN.history file in the archive.
+ *
+ * These tests write a real history file to a temp dir because
+ * parse_history_switchpoint() reads from disk; segment presence is checked
+ * via the in-memory segments[] array (no segment files needed).
+ * ------------------------------------------------------------------------- */
+
+/*
+ * Helper: write a one-line timeline history file.
+ *   dir/NNNNNNNN.history: "<parent_tli>\t<switch_lsn_str>\treason\n"
+ */
+static void
+write_history_file(const char *dir, uint32_t new_tli, uint32_t parent_tli,
+				   const char *switch_lsn_str)
+{
+	char  path[PATH_MAX];
+	FILE *fp;
+
+	snprintf(path, sizeof(path), "%s/%08X.history", dir, new_tli);
+	fp = fopen(path, "w");
+	if (fp == NULL)
+		return;
+	fprintf(fp, "%u\t%s\tno recovery target specified\n",
+			parent_tli, switch_lsn_str);
+	fclose(fp);
+}
+
+/*
+ * Helper: build an in-memory WALArchiveInfo from an explicit WALSegmentName
+ * array (may mix timelines).  archive_path is set so that parse_history_*
+ * can find the history file on disk.
+ */
+static void
+build_archive_from_segs(WALArchiveInfo *wi, const char *archive_path,
+						const WALSegmentName *segs, int nseg)
+{
+	memset(wi, 0, sizeof(*wi));
+	if (archive_path)
+		str_copy(wi->archive_path, archive_path, sizeof(wi->archive_path));
+	wi->segment_count = nseg;
+	wi->segments = calloc((size_t)nseg, sizeof(WALSegmentName));
+	if (wi->segments && nseg > 0)
+		memcpy(wi->segments, segs, (size_t)nseg * sizeof(WALSegmentName));
+}
+
+/*
+ * Scenario used by most cross-timeline tests:
+ *   prev: tli=1, stop_lsn=0x2000000  → stop_seg  = tli=1 seg 2
+ *   switch_lsn: 0x5000000            → pre-switch segs 3,4,5 on tli=1
+ *   next: tli=2, start_lsn=0x8000000 → post-switch segs 6,7 on tli=2
+ *                                       (switch_seg_new = tli=2 seg 5,
+ *                                        next_start_seg = tli=2 seg 8,
+ *                                        bridge = segs 6,7)
+ */
+
+/*
+ * History file is absent → cannot determine switch point → 1 error.
+ */
+START_TEST(test_xchain_no_history_file)
+{
+	char           dir[64];
+	BackupInfo    *next = make_backup_node("NEXT", 2, 0x8000000, 0xA000000, NULL);
+	BackupInfo    *prev = make_backup_node("PREV", 1, 0x1000000, 0x2000000, next);
+	WALArchiveInfo wi;
+
+	snprintf(dir, sizeof(dir), "/tmp/pg_xch_%d", (int)getpid());
+	mkdir(dir, 0755);
+	/* No history file written */
+	build_archive_from_segs(&wi, dir, NULL, 0);
+
+	ValidationResult *r = check_wal_restore_chain(prev, &wi);
+
+	char cmd[80];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	(void)system(cmd);
+	free(wi.segments);
+	free_chain(prev);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert(strstr(r->errors[0], "cross-timeline") != NULL);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * History file present, all pre- and post-switch bridge segments in archive.
+ * Expected: 0 errors.
+ */
+START_TEST(test_xchain_pre_switch_complete)
+{
+	char           dir[64];
+	BackupInfo    *next = make_backup_node("NEXT", 2, 0x8000000, 0xA000000, NULL);
+	BackupInfo    *prev = make_backup_node("PREV", 1, 0x1000000, 0x2000000, next);
+	WALSegmentName segs[] = {
+		/* tli=1, pre-switch bridge: segs 3,4,5 */
+		{1, 0, 3}, {1, 0, 4}, {1, 0, 5},
+		/* tli=2, post-switch bridge: segs 6,7 */
+		{2, 0, 6}, {2, 0, 7}
+	};
+	WALArchiveInfo wi;
+
+	snprintf(dir, sizeof(dir), "/tmp/pg_xch_%d", (int)getpid());
+	mkdir(dir, 0755);
+	write_history_file(dir, 2, 1, "0/5000000");
+	build_archive_from_segs(&wi, dir, segs, 5);
+
+	ValidationResult *r = check_wal_restore_chain(prev, &wi);
+
+	char cmd[80];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	(void)system(cmd);
+	free(wi.segments);
+	free_chain(prev);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * Segment 4 on tli=1 (pre-switch bridge) is missing from the archive.
+ * Expected: 1 error mentioning "pre-switch".
+ */
+START_TEST(test_xchain_pre_switch_missing)
+{
+	char           dir[64];
+	BackupInfo    *next = make_backup_node("NEXT", 2, 0x8000000, 0xA000000, NULL);
+	BackupInfo    *prev = make_backup_node("PREV", 1, 0x1000000, 0x2000000, next);
+	WALSegmentName segs[] = {
+		{1, 0, 3}, /* 4 missing */ {1, 0, 5},
+		{2, 0, 6}, {2, 0, 7}
+	};
+	WALArchiveInfo wi;
+
+	snprintf(dir, sizeof(dir), "/tmp/pg_xch_%d", (int)getpid());
+	mkdir(dir, 0755);
+	write_history_file(dir, 2, 1, "0/5000000");
+	build_archive_from_segs(&wi, dir, segs, 4);
+
+	ValidationResult *r = check_wal_restore_chain(prev, &wi);
+
+	char cmd[80];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	(void)system(cmd);
+	free(wi.segments);
+	free_chain(prev);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert(strstr(r->errors[0], "pre-switch") != NULL);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * Segment 7 on tli=2 (post-switch bridge) is missing from the archive.
+ * Expected: 1 error mentioning "post-switch".
+ */
+START_TEST(test_xchain_post_switch_missing)
+{
+	char           dir[64];
+	BackupInfo    *next = make_backup_node("NEXT", 2, 0x8000000, 0xA000000, NULL);
+	BackupInfo    *prev = make_backup_node("PREV", 1, 0x1000000, 0x2000000, next);
+	WALSegmentName segs[] = {
+		{1, 0, 3}, {1, 0, 4}, {1, 0, 5},
+		{2, 0, 6} /* 7 missing */
+	};
+	WALArchiveInfo wi;
+
+	snprintf(dir, sizeof(dir), "/tmp/pg_xch_%d", (int)getpid());
+	mkdir(dir, 0755);
+	write_history_file(dir, 2, 1, "0/5000000");
+	build_archive_from_segs(&wi, dir, segs, 4);
+
+	ValidationResult *r = check_wal_restore_chain(prev, &wi);
+
+	char cmd[80];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	(void)system(cmd);
+	free(wi.segments);
+	free_chain(prev);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert(strstr(r->errors[0], "post-switch") != NULL);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * Switch happens at exactly next.start_lsn → post-switch bridge is empty.
+ * prev: tli=1, stop_lsn=0x4000000 (seg 4).
+ * switch_lsn: 0x5000000 → switch_seg_old = tli=1 seg 5,
+ *                          switch_seg_new = tli=2 seg 5.
+ * next: tli=2, start_lsn=0x5000000 → next_start_seg = tli=2 seg 5.
+ * Post-switch bridge: bridge_cur starts at seg 6, but 6 >= next_start 5 →
+ * empty.  Pre-switch bridge: tli=1 seg 5 (stop+1 = 5 ≤ switch = 5).
+ * Expected: 0 errors when tli=1 seg 5 is in archive.
+ */
+START_TEST(test_xchain_adjacent_to_switch)
+{
+	char           dir[64];
+	BackupInfo    *next = make_backup_node("NEXT", 2, 0x5000000, 0x8000000, NULL);
+	BackupInfo    *prev = make_backup_node("PREV", 1, 0x1000000, 0x4000000, next);
+	WALSegmentName segs[] = {
+		{1, 0, 5}   /* only pre-switch seg needed */
+	};
+	WALArchiveInfo wi;
+
+	snprintf(dir, sizeof(dir), "/tmp/pg_xch_%d", (int)getpid());
+	mkdir(dir, 0755);
+	write_history_file(dir, 2, 1, "0/5000000");
+	build_archive_from_segs(&wi, dir, segs, 1);
+
+	ValidationResult *r = check_wal_restore_chain(prev, &wi);
+
+	char cmd[80];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	(void)system(cmd);
+	free(wi.segments);
+	free_chain(prev);
 
 	ck_assert_ptr_nonnull(r);
 	ck_assert_int_eq(r->error_count, 0);
@@ -1402,6 +1716,7 @@ wal_validator_suite(void)
 	TCase *tc_rec_crc;
 	TCase *tc_arch_headers;
 	TCase *tc_restore_chain;
+	TCase *tc_xchain;
 	TCase *tc_integration;
 
 	s = suite_create("WAL Validator");
@@ -1431,6 +1746,7 @@ wal_validator_suite(void)
 	tcase_add_test(tc_arch_headers, test_archive_headers_empty);
 	tcase_add_test(tc_arch_headers, test_archive_headers_all_valid);
 	tcase_add_test(tc_arch_headers, test_archive_headers_bad_pageaddr);
+	tcase_add_test(tc_arch_headers, test_archive_headers_truncated);
 	suite_add_tcase(s, tc_arch_headers);
 
 	/* Restore-chain WAL continuity unit tests */
@@ -1443,6 +1759,15 @@ wal_validator_suite(void)
 	tcase_add_test(tc_restore_chain, test_chain_missing_bridge);
 	tcase_add_test(tc_restore_chain, test_chain_different_timelines);
 	suite_add_tcase(s, tc_restore_chain);
+
+	/* Cross-timeline WAL chain validation */
+	tc_xchain = tcase_create("cross_timeline_chain");
+	tcase_add_test(tc_xchain, test_xchain_no_history_file);
+	tcase_add_test(tc_xchain, test_xchain_pre_switch_complete);
+	tcase_add_test(tc_xchain, test_xchain_pre_switch_missing);
+	tcase_add_test(tc_xchain, test_xchain_post_switch_missing);
+	tcase_add_test(tc_xchain, test_xchain_adjacent_to_switch);
+	suite_add_tcase(s, tc_xchain);
 
 	/* Integration tests with real pg_probackup backup */
 	tc_integration = tcase_create("Integration");
