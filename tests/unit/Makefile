@@ -4,6 +4,8 @@
 CC = clang
 CFLAGS = -std=c11 -Wall -Wextra -Werror -g
 CFLAGS += -I../../include
+# Header dependency tracking: recompile when included headers change
+CFLAGS += -MMD -MP
 # Suppress warning from libcheck headers about GNU extensions
 CFLAGS += -Wno-gnu-zero-variadic-macro-arguments
 # GCC 14 -Wformat-truncation=2 warns when a string argument declared as
@@ -81,6 +83,11 @@ $(TEST_RUNNER): $(TEST_OBJS) $(COMMON_OBJS)
 
 clean:
 	rm -f $(TEST_OBJS) $(COMMON_OBJS) $(TEST_RUNNER)
+	rm -f $(TEST_OBJS:.o=.d) $(COMMON_OBJS:.o=.d)
 
 run: $(TEST_RUNNER)
 	./$(TEST_RUNNER)
+
+# Include auto-generated dependency files (created by -MMD -MP)
+-include $(TEST_OBJS:.o=.d)
+-include $(COMMON_OBJS:.o=.d)

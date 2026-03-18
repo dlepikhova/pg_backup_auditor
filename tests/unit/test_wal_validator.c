@@ -266,6 +266,135 @@ START_TEST(test_check_wal_availability_empty_archive)
 END_TEST
 
 /* -----------------------------------------------------------------------
+ * redo_lsn tests: verify that check_wal_availability extends the WAL range
+ * to lsn_to_seg(redo_lsn) when redo_lsn falls in an earlier segment than
+ * start_lsn.  Tests work entirely in-memory (no disk files).
+ *
+ * Segment layout used by these tests (16 MB each):
+ *   seg 1 = 0x1000000 .. 0x1FFFFFF
+ *   seg 2 = 0x2000000 .. 0x2FFFFFF   ← start_lsn segment
+ *   seg 3 = 0x3000000 .. 0x3FFFFFF
+ *   ...
+ *   seg 5 = 0x5000000 .. 0x5FFFFFF   ← stop_lsn segment
+ * ----------------------------------------------------------------------- */
+
+/*
+ * Helper: build a WALArchiveInfo with segments [first_seg, last_seg] inclusive.
+ * timeline=1, log_id=0 throughout.
+ */
+static WALArchiveInfo *
+make_segs(int first_seg, int last_seg)
+{
+	WALArchiveInfo *wi;
+	int             count = last_seg - first_seg + 1;
+	int             i;
+
+	wi = calloc(1, sizeof(WALArchiveInfo));
+	ck_assert_ptr_nonnull(wi);
+	strcpy(wi->archive_path, "/test/redo/archive");
+	wi->segment_count = count;
+	wi->segments = malloc((size_t)count * sizeof(WALSegmentName));
+	ck_assert_ptr_nonnull(wi->segments);
+
+	for (i = 0; i < count; i++)
+	{
+		wi->segments[i].timeline = 1;
+		wi->segments[i].log_id  = 0;
+		wi->segments[i].seg_id  = (uint32_t)(first_seg + i);
+	}
+	return wi;
+}
+
+/*
+ * redo_lsn within the same WAL segment as start_lsn → no range extension.
+ * Archive has only segments 2..5.  redo_lsn=0x2000100 → still segment 2.
+ * Expected: 0 errors.
+ */
+START_TEST(test_wal_avail_redo_same_segment)
+{
+	BackupInfo      bi;
+	WALArchiveInfo *wi;
+	ValidationResult *r;
+
+	memset(&bi, 0, sizeof(bi));
+	strcpy(bi.backup_id, "redo-same-seg");
+	bi.timeline  = 1;
+	bi.start_lsn = 0x2000000;   /* segment 2 */
+	bi.stop_lsn  = 0x5000000;   /* segment 5 */
+	bi.redo_lsn  = 0x2000100;   /* still segment 2, just a different offset */
+
+	wi = make_segs(2, 5);       /* segments 2..5 present, no seg 1 */
+
+	r = check_wal_availability(&bi, wi);
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	ck_assert_int_eq(r->status, BACKUP_STATUS_OK);
+
+	free_validation_result(r);
+	free_wal_archive_info(wi);
+}
+END_TEST
+
+/*
+ * redo_lsn in an earlier segment (seg 1) and that segment IS in the archive.
+ * Expected: 0 errors.
+ */
+START_TEST(test_wal_avail_redo_earlier_present)
+{
+	BackupInfo      bi;
+	WALArchiveInfo *wi;
+	ValidationResult *r;
+
+	memset(&bi, 0, sizeof(bi));
+	strcpy(bi.backup_id, "redo-earlier-ok");
+	bi.timeline  = 1;
+	bi.start_lsn = 0x2000000;   /* segment 2 */
+	bi.stop_lsn  = 0x5000000;   /* segment 5 */
+	bi.redo_lsn  = 0x1000000;   /* segment 1 — earlier than start_lsn segment */
+
+	wi = make_segs(1, 5);       /* segments 1..5 all present */
+
+	r = check_wal_availability(&bi, wi);
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	ck_assert_int_eq(r->status, BACKUP_STATUS_OK);
+
+	free_validation_result(r);
+	free_wal_archive_info(wi);
+}
+END_TEST
+
+/*
+ * redo_lsn in an earlier segment (seg 1) but that segment is MISSING from
+ * the archive.  Without the fix, this would report 0 errors.  With the fix,
+ * the range is extended to seg 1 → 1 error (missing seg 1).
+ */
+START_TEST(test_wal_avail_redo_earlier_missing)
+{
+	BackupInfo      bi;
+	WALArchiveInfo *wi;
+	ValidationResult *r;
+
+	memset(&bi, 0, sizeof(bi));
+	strcpy(bi.backup_id, "redo-earlier-miss");
+	bi.timeline  = 1;
+	bi.start_lsn = 0x2000000;   /* segment 2 */
+	bi.stop_lsn  = 0x5000000;   /* segment 5 */
+	bi.redo_lsn  = 0x1000000;   /* segment 1 — earlier, and NOT in archive */
+
+	wi = make_segs(2, 5);       /* segments 2..5 only — seg 1 absent */
+
+	r = check_wal_availability(&bi, wi);
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert_int_eq(r->status, BACKUP_STATUS_ERROR);
+
+	free_validation_result(r);
+	free_wal_archive_info(wi);
+}
+END_TEST
+
+/* -----------------------------------------------------------------------
  * Integration tests: real pg_probackup backup
  * These tests are skipped if the required environment variables are not set
  * or if the backup catalog is not present at the given path.
@@ -1738,6 +1867,7 @@ wal_validator_suite(void)
 {
 	Suite *s;
 	TCase *tc_availability;
+	TCase *tc_redo_lsn;
 	TCase *tc_rec_crc;
 	TCase *tc_arch_headers;
 	TCase *tc_restore_chain;
@@ -1755,6 +1885,13 @@ wal_validator_suite(void)
 	tcase_add_test(tc_availability, test_check_wal_availability_gap);
 	tcase_add_test(tc_availability, test_check_wal_availability_empty_archive);
 	suite_add_tcase(s, tc_availability);
+
+	/* redo_lsn WAL range extension unit tests */
+	tc_redo_lsn = tcase_create("redo_lsn");
+	tcase_add_test(tc_redo_lsn, test_wal_avail_redo_same_segment);
+	tcase_add_test(tc_redo_lsn, test_wal_avail_redo_earlier_present);
+	tcase_add_test(tc_redo_lsn, test_wal_avail_redo_earlier_missing);
+	suite_add_tcase(s, tc_redo_lsn);
 
 	/* Per-record CRC unit tests */
 	tc_rec_crc = tcase_create("record_crc");

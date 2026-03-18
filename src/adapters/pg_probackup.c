@@ -436,6 +436,47 @@ pg_probackup_read_metadata(const char *backup_path, BackupInfo *info)
 
 	fclose(fp);
 
+	/*
+	 * Try to read redo_lsn from database/backup_label.
+	 *
+	 * PostgreSQL writes backup_label into the data directory at backup start.
+	 * START WAL LOCATION = the redo pointer of the forced checkpoint = the
+	 * oldest WAL location needed for recovery.
+	 *
+	 * This value may differ from start-lsn in backup.control if pg_probackup
+	 * stored the checkpoint record LSN (CHECKPOINT LOCATION) there instead.
+	 * When they fall in different WAL segments, the redo segment must also be
+	 * present in the archive for recovery to succeed.
+	 */
+	{
+		char   bl_path[PATH_MAX];
+		FILE  *blf;
+		char   bl_line[256];
+
+		path_join(bl_path, sizeof(bl_path), backup_path, "database");
+		path_join(bl_path, sizeof(bl_path), bl_path, "backup_label");
+
+		blf = fopen(bl_path, "r");
+		if (blf != NULL)
+		{
+			while (fgets(bl_line, sizeof(bl_line), blf) != NULL)
+			{
+				if (strncmp(bl_line, "START WAL LOCATION:", 19) == 0)
+				{
+					unsigned int hi, lo;
+					if (sscanf(bl_line + 19, " %X/%X", &hi, &lo) == 2)
+						info->redo_lsn = ((uint64_t)hi << 32) | lo;
+					break;
+				}
+			}
+			fclose(blf);
+			if (info->redo_lsn != 0)
+				log_debug("Parsed redo_lsn from backup_label: %X/%X",
+						  (uint32_t)(info->redo_lsn >> 32),
+						  (uint32_t) info->redo_lsn);
+		}
+	}
+
 	/* Set tool type */
 	info->tool = BACKUP_TOOL_PG_PROBACKUP;
 

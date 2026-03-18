@@ -84,6 +84,7 @@ typedef struct BackupInfo {
 	time_t          end_time;
 	XLogRecPtr      start_lsn;
 	XLogRecPtr      stop_lsn;
+	XLogRecPtr      redo_lsn;       /* START WAL LOCATION from database/backup_label; 0 if unknown */
 	TimeLineID      timeline;
 	uint32_t        pg_version;
 	char            tool_version[32];   /* pg_probackup/pg_basebackup version */

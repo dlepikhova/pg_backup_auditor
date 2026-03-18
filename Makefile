@@ -91,6 +91,7 @@ uninstall:
 # Clean
 clean:
 	rm -f $(OBJS) $(TARGET)
+	@cd tests/unit && $(MAKE) clean 2>/dev/null || true
 
 # Clean all (including dependencies)
 distclean: clean

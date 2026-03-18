@@ -795,8 +795,36 @@ check_wal_availability(BackupInfo *backup, WALArchiveInfo *wal_info)
 	}
 
 	/* Convert LSNs to segment names
-	 * Use default 16MB segment size (0x1000000) */
-	lsn_to_seg(backup->start_lsn, backup->timeline, &start_seg, 0x1000000);
+	 * Use default 16MB segment size (0x1000000).
+	 *
+	 * Use redo_lsn as the effective start when it falls in an earlier segment
+	 * than start_lsn.  redo_lsn is parsed from database/backup_label
+	 * (START WAL LOCATION) and represents the oldest WAL location needed for
+	 * recovery.  If it precedes start_lsn across a segment boundary the
+	 * additional segment must also be present in the archive.
+	 */
+	{
+		XLogRecPtr eff_start = backup->start_lsn;
+
+		if (backup->redo_lsn != 0 && backup->redo_lsn < backup->start_lsn)
+		{
+			WALSegmentName redo_seg, chk_seg;
+
+			lsn_to_seg(backup->redo_lsn,  backup->timeline, &redo_seg, 0x1000000);
+			lsn_to_seg(backup->start_lsn, backup->timeline, &chk_seg,  0x1000000);
+
+			if (redo_seg.log_id < chk_seg.log_id ||
+				(redo_seg.log_id == chk_seg.log_id &&
+				 redo_seg.seg_id  < chk_seg.seg_id))
+			{
+				eff_start = backup->redo_lsn;
+				log_debug("Backup %s: redo_lsn precedes start_lsn by a segment "
+						  "— extending WAL range to redo segment",
+						  backup->backup_id);
+			}
+		}
+		lsn_to_seg(eff_start, backup->timeline, &start_seg, 0x1000000);
+	}
 	lsn_to_seg(backup->stop_lsn, backup->timeline, &stop_seg, 0x1000000);
 
 	log_debug("Checking WAL availability for backup %s", backup->backup_id);
@@ -914,7 +942,24 @@ check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info)
 	if (backup->start_lsn == 0 && backup->stop_lsn == 0)
 		return result;  /* No LSN info — nothing to check */
 
-	lsn_to_seg(backup->start_lsn, backup->timeline, &start_seg, 0x1000000);
+	/* Use redo_lsn as effective start when it falls in an earlier segment */
+	{
+		XLogRecPtr eff_start = backup->start_lsn;
+
+		if (backup->redo_lsn != 0 && backup->redo_lsn < backup->start_lsn)
+		{
+			WALSegmentName redo_seg, chk_seg;
+
+			lsn_to_seg(backup->redo_lsn,  backup->timeline, &redo_seg, 0x1000000);
+			lsn_to_seg(backup->start_lsn, backup->timeline, &chk_seg,  0x1000000);
+
+			if (redo_seg.log_id < chk_seg.log_id ||
+				(redo_seg.log_id == chk_seg.log_id &&
+				 redo_seg.seg_id  < chk_seg.seg_id))
+				eff_start = backup->redo_lsn;
+		}
+		lsn_to_seg(eff_start,         backup->timeline, &start_seg, 0x1000000);
+	}
 	lsn_to_seg(backup->stop_lsn,  backup->timeline, &stop_seg,  0x1000000);
 
 	log_debug("Checking WAL headers for backup %s "
