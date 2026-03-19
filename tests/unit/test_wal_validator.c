@@ -1859,6 +1859,174 @@ START_TEST(test_xchain_adjacent_to_switch)
 }
 END_TEST
 
+/* ======================================================================
+ * Stream backup WAL validation tests
+ *
+ * pg_probackup stream backups store WAL in database/pg_wal/ inside the
+ * backup directory.  We test check_wal_availability() using a real
+ * on-disk directory scanned by scan_wal_archive().
+ *
+ * scan_wal_archive() only parses filenames, so empty stub files suffice.
+ * Filename format: TTTTTTTTLLLLLLLLSSSSSSSS (8+8+8 hex digits).
+ * ====================================================================== */
+
+/*
+ * Create an empty stub file with the standard WAL filename for the given
+ * timeline / seg_id (log_id is always 0 in these tests).
+ */
+static void
+create_wal_stub(const char *dir, uint32_t tli, uint32_t seg_id)
+{
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/%08X%08X%08X", dir, tli, 0u, seg_id);
+	FILE *fp = fopen(path, "w");
+	if (fp != NULL) fclose(fp);
+}
+
+/*
+ * All three required segments (1, 2, 3) are present in database/pg_wal/.
+ * Expected: 0 errors.
+ */
+START_TEST(test_stream_wal_all_present)
+{
+	char           backup_dir[PATH_MAX];
+	char           wal_dir[PATH_MAX];
+	BackupInfo     bi;
+	WALArchiveInfo *wi;
+	ValidationResult *r;
+
+	snprintf(backup_dir, sizeof(backup_dir), "/tmp/pg_strm_%d", (int)getpid());
+	snprintf(wal_dir,    sizeof(wal_dir),    "%s/database/pg_wal", backup_dir);
+	mkdir(backup_dir, 0755);
+	{
+		char db_dir[PATH_MAX];
+		snprintf(db_dir, sizeof(db_dir), "%s/database", backup_dir);
+		mkdir(db_dir, 0755);
+	}
+	mkdir(wal_dir, 0755);
+
+	create_wal_stub(wal_dir, 1, 1);
+	create_wal_stub(wal_dir, 1, 2);
+	create_wal_stub(wal_dir, 1, 3);
+
+	memset(&bi, 0, sizeof(bi));
+	strcpy(bi.backup_id, "stream-all");
+	bi.timeline   = 1;
+	bi.start_lsn  = 0x1000000;   /* segment 1 */
+	bi.stop_lsn   = 0x3000000;   /* segment 3 */
+	bi.wal_stream = true;
+
+	wi = scan_wal_archive(wal_dir);
+
+	char cmd[PATH_MAX + 8];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", backup_dir);
+	(void)system(cmd);
+
+	ck_assert_ptr_nonnull(wi);
+	r = check_wal_availability(&bi, wi);
+	free_wal_archive_info(wi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * Segment 2 is missing from database/pg_wal/ (segments 1 and 3 present).
+ * Expected: 1 error (missing segment 2).
+ */
+START_TEST(test_stream_wal_missing_segment)
+{
+	char           backup_dir[PATH_MAX];
+	char           wal_dir[PATH_MAX];
+	BackupInfo     bi;
+	WALArchiveInfo *wi;
+	ValidationResult *r;
+
+	snprintf(backup_dir, sizeof(backup_dir), "/tmp/pg_strm_%d", (int)getpid());
+	snprintf(wal_dir,    sizeof(wal_dir),    "%s/database/pg_wal", backup_dir);
+	mkdir(backup_dir, 0755);
+	{
+		char db_dir[PATH_MAX];
+		snprintf(db_dir, sizeof(db_dir), "%s/database", backup_dir);
+		mkdir(db_dir, 0755);
+	}
+	mkdir(wal_dir, 0755);
+
+	create_wal_stub(wal_dir, 1, 1);
+	/* segment 2 intentionally absent */
+	create_wal_stub(wal_dir, 1, 3);
+
+	memset(&bi, 0, sizeof(bi));
+	strcpy(bi.backup_id, "stream-miss");
+	bi.timeline   = 1;
+	bi.start_lsn  = 0x1000000;
+	bi.stop_lsn   = 0x3000000;
+	bi.wal_stream = true;
+
+	wi = scan_wal_archive(wal_dir);
+
+	char cmd[PATH_MAX + 8];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", backup_dir);
+	(void)system(cmd);
+
+	ck_assert_ptr_nonnull(wi);
+	r = check_wal_availability(&bi, wi);
+	free_wal_archive_info(wi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * database/pg_wal/ exists but contains no WAL files.
+ * Expected: 3 errors (segments 1, 2, 3 all missing).
+ */
+START_TEST(test_stream_wal_empty_dir)
+{
+	char           backup_dir[PATH_MAX];
+	char           wal_dir[PATH_MAX];
+	BackupInfo     bi;
+	WALArchiveInfo *wi;
+	ValidationResult *r;
+
+	snprintf(backup_dir, sizeof(backup_dir), "/tmp/pg_strm_%d", (int)getpid());
+	snprintf(wal_dir,    sizeof(wal_dir),    "%s/database/pg_wal", backup_dir);
+	mkdir(backup_dir, 0755);
+	{
+		char db_dir[PATH_MAX];
+		snprintf(db_dir, sizeof(db_dir), "%s/database", backup_dir);
+		mkdir(db_dir, 0755);
+	}
+	mkdir(wal_dir, 0755);
+	/* no stubs created — directory is empty */
+
+	memset(&bi, 0, sizeof(bi));
+	strcpy(bi.backup_id, "stream-empty");
+	bi.timeline   = 1;
+	bi.start_lsn  = 0x1000000;
+	bi.stop_lsn   = 0x3000000;
+	bi.wal_stream = true;
+
+	wi = scan_wal_archive(wal_dir);
+
+	char cmd[PATH_MAX + 8];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", backup_dir);
+	(void)system(cmd);
+
+	ck_assert_ptr_nonnull(wi);
+	r = check_wal_availability(&bi, wi);
+	free_wal_archive_info(wi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 3);
+	free_validation_result(r);
+}
+END_TEST
+
 /*
  * Test Suite
  */
@@ -1868,6 +2036,7 @@ wal_validator_suite(void)
 	Suite *s;
 	TCase *tc_availability;
 	TCase *tc_redo_lsn;
+	TCase *tc_stream_wal;
 	TCase *tc_rec_crc;
 	TCase *tc_arch_headers;
 	TCase *tc_restore_chain;
@@ -1892,6 +2061,13 @@ wal_validator_suite(void)
 	tcase_add_test(tc_redo_lsn, test_wal_avail_redo_earlier_present);
 	tcase_add_test(tc_redo_lsn, test_wal_avail_redo_earlier_missing);
 	suite_add_tcase(s, tc_redo_lsn);
+
+	/* Stream backup WAL validation unit tests */
+	tc_stream_wal = tcase_create("stream_wal");
+	tcase_add_test(tc_stream_wal, test_stream_wal_all_present);
+	tcase_add_test(tc_stream_wal, test_stream_wal_missing_segment);
+	tcase_add_test(tc_stream_wal, test_stream_wal_empty_dir);
+	suite_add_tcase(s, tc_stream_wal);
 
 	/* Per-record CRC unit tests */
 	tc_rec_crc = tcase_create("record_crc");

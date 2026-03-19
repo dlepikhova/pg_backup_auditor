@@ -349,12 +349,29 @@ cmd_check_main(int argc, char **argv)
 			{
 				/* Determine whether we have a WAL archive to check against:
 				 * - archive mode: use wal_info (explicit or auto-detected)
-				 * - stream mode:  use wal_info only if explicitly provided via --wal-archive */
+				 * - stream mode with --wal-archive: use wal_info (explicit)
+				 * - stream mode (pg_probackup): scan database/pg_wal/ inside backup */
 				WALArchiveInfo *effective_wal = NULL;
+				WALArchiveInfo *stream_wal   = NULL;  /* per-backup alloc, freed below */
+
 				if (!current->wal_stream)
 					effective_wal = wal_info;          /* explicit or auto-detected */
 				else if (opts.wal_archive != NULL)
-					effective_wal = wal_info;          /* explicit only for stream */
+					effective_wal = wal_info;          /* explicit --wal-archive overrides */
+				else if (current->tool == BACKUP_TOOL_PG_PROBACKUP)
+				{
+					/* pg_probackup stream backup: WAL embedded in database/pg_wal/ */
+					char pg_wal_path[PATH_MAX];
+					path_join(pg_wal_path, sizeof(pg_wal_path),
+							  current->backup_path, "database");
+					path_join(pg_wal_path, sizeof(pg_wal_path),
+							  pg_wal_path, "pg_wal");
+					if (is_directory(pg_wal_path))
+					{
+						stream_wal    = scan_wal_archive(pg_wal_path);
+						effective_wal = stream_wal;
+					}
+				}
 
 				if (effective_wal != NULL)
 				{
@@ -420,12 +437,19 @@ cmd_check_main(int argc, char **argv)
 				}
 				else if (current->wal_stream)
 				{
-					/* Stream backup without explicit --wal-archive: cannot verify WAL */
-					printf("  %s[WARNING]%s WAL not verified: stream backup, no --wal-archive provided\n",
+					/* Stream backup: no --wal-archive and database/pg_wal/ not found */
+					printf("  %s[WARNING]%s WAL not verified: stream backup, "
+						   "no --wal-archive provided and database/pg_wal/ not found\n",
 						   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "");
 					total_warnings++;
 				}
 				/* archive mode with wal_info == NULL: auto-detection failed, skip silently */
+
+				if (stream_wal != NULL)
+				{
+					free_wal_archive_info(stream_wal);
+					stream_wal = NULL;
+				}
 			}
 		}
 
@@ -447,6 +471,19 @@ cmd_check_main(int argc, char **argv)
 		printf("WAL Archive\n");
 		printf("----------------------------------------------------\n");
 
+		/* Check whether any backup in the chain uses stream WAL.
+		 * Stream backups do not store bridge segments (WAL between
+		 * consecutive backups), so missing bridges are expected. */
+		bool chain_has_stream = false;
+		for (BackupInfo *b = backups; b != NULL; b = b->next)
+		{
+			if (b->wal_stream)
+			{
+				chain_has_stream = true;
+				break;
+			}
+		}
+
 		ValidationResult *chain_result = check_wal_restore_chain(backups, wal_info);
 		if (chain_result != NULL)
 		{
@@ -456,6 +493,11 @@ cmd_check_main(int argc, char **argv)
 					   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
 				for (int i = 0; i < chain_result->error_count; i++)
 					printf("          %s\n", chain_result->errors[i]);
+				if (chain_has_stream)
+					printf("  %s[NOTE]%s Chain contains stream backups — bridge segments "
+						   "between backups are not stored in stream mode and will not "
+						   "appear in the WAL archive\n",
+						   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "");
 			}
 			else
 			{
