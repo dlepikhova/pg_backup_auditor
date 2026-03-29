@@ -9,6 +9,7 @@ pg_backup_auditor
 
 # Dependencies
 .depend
+*.d
 
 # Debug files
 *.dSYM/
