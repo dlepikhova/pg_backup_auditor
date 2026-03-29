@@ -2027,6 +2027,163 @@ START_TEST(test_stream_wal_empty_dir)
 }
 END_TEST
 
+/* ======================================================================
+ * Non-standard WAL segment size (BUG-002 fix)
+ *
+ * PostgreSQL can be compiled with --with-wal-segsize=N (N in MB, power of 2).
+ * The actual size is stored in xlp_seg_size (offset 32) of every WAL page
+ * header.  Previously all lsn_to_seg() calls hardcoded 16 MB; now
+ * detect_wal_segment_size() reads the real value from the first segment.
+ *
+ * Helper write_wal_seg_with_size() writes a 40-byte WAL long page header with
+ * a configurable segment size, then extends the file to that full size as a
+ * sparse file.  No XLogRecord data is needed because tests only exercise
+ * check_wal_availability() and check_wal_headers() at the header level.
+ * ====================================================================== */
+
+/*
+ * Write a minimal WAL long page header with configurable seg_size.
+ * The file is extended to seg_size bytes as a sparse file.
+ */
+static void
+write_wal_seg_with_size(const char *path, uint32_t tli, uint64_t pageaddr,
+						uint32_t seg_size)
+{
+	FILE    *f;
+	uint8_t  hdr[40] = {0};
+
+	/* xlp_magic = 0xD071 (LE) */
+	hdr[0] = 0x71; hdr[1] = 0xD0;
+	/* xlp_info = XLP_LONG_HEADER (LE) */
+	hdr[2] = 0x02; hdr[3] = 0x00;
+	/* xlp_tli (LE) */
+	hdr[4] = (uint8_t)(tli);
+	hdr[5] = (uint8_t)(tli >> 8);
+	hdr[6] = (uint8_t)(tli >> 16);
+	hdr[7] = (uint8_t)(tli >> 24);
+	/* xlp_pageaddr (LE) */
+	hdr[8]  = (uint8_t)(pageaddr);
+	hdr[9]  = (uint8_t)(pageaddr >> 8);
+	hdr[10] = (uint8_t)(pageaddr >> 16);
+	hdr[11] = (uint8_t)(pageaddr >> 24);
+	hdr[12] = (uint8_t)(pageaddr >> 32);
+	hdr[13] = (uint8_t)(pageaddr >> 40);
+	hdr[14] = (uint8_t)(pageaddr >> 48);
+	hdr[15] = (uint8_t)(pageaddr >> 56);
+	/* xlp_sysid = 1 */
+	hdr[24] = 0x01;
+	/* xlp_seg_size (LE) */
+	hdr[32] = (uint8_t)(seg_size);
+	hdr[33] = (uint8_t)(seg_size >> 8);
+	hdr[34] = (uint8_t)(seg_size >> 16);
+	hdr[35] = (uint8_t)(seg_size >> 24);
+	/* xlp_xlog_blcksz = 8192 (LE) */
+	hdr[36] = 0x00; hdr[37] = 0x20; hdr[38] = 0x00; hdr[39] = 0x00;
+
+	f = fopen(path, "wb");
+	if (f == NULL)
+		return;
+	fwrite(hdr, 1, sizeof(hdr), f);
+
+	/* Extend to full seg_size as a sparse file */
+	(void)fseek(f, (long)seg_size - 1, SEEK_SET);
+	(void)fputc('\0', f);
+
+	fclose(f);
+}
+
+/*
+ * With 1 MB segments: segments 1, 2, 3 all present.
+ * backup.start_lsn = 0x100000 (seg 1), stop_lsn = 0x300000 (seg 3).
+ * detect_wal_segment_size() should read 0x100000 from seg 1's header.
+ * Expected: 0 errors from check_wal_availability().
+ */
+START_TEST(test_seg_size_1mb_avail)
+{
+	char            dir[PATH_MAX];
+	char            seg[PATH_MAX];
+	WALArchiveInfo *wi;
+	BackupInfo      bi;
+	ValidationResult *r;
+	uint32_t        sz = 0x100000;   /* 1 MB */
+
+	snprintf(dir, sizeof(dir), "/tmp/pg_sz1mb_%d", (int)getpid());
+	mkdir(dir, 0755);
+
+	for (int s = 1; s <= 3; s++)
+	{
+		snprintf(seg, sizeof(seg), "%s/0000000100000000%08X", dir, s);
+		write_wal_seg_with_size(seg, 1, (uint64_t)s * sz, sz);
+	}
+
+	wi = scan_wal_archive(dir);
+	ck_assert_ptr_nonnull(wi);
+	ck_assert_int_eq(wi->segment_count, 3);
+
+	memset(&bi, 0, sizeof(bi));
+	strcpy(bi.backup_id, "seg-size-1mb");
+	bi.timeline  = 1;
+	bi.start_lsn = 1 * (uint64_t)sz;   /* 0x100000 */
+	bi.stop_lsn  = 3 * (uint64_t)sz;   /* 0x300000 */
+
+	r = check_wal_availability(&bi, wi);
+	free_wal_archive_info(wi);
+
+	char cmd[PATH_MAX + 8];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	(void)system(cmd);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * With 1 MB segments: check_wal_headers() must compute expected_pageaddr
+ * using the detected 1 MB size, not the hardcoded 16 MB default.
+ * Same 3 segments; expected: 0 errors.
+ */
+START_TEST(test_seg_size_1mb_headers)
+{
+	char            dir[PATH_MAX];
+	char            seg[PATH_MAX];
+	WALArchiveInfo *wi;
+	BackupInfo      bi;
+	ValidationResult *r;
+	uint32_t        sz = 0x100000;   /* 1 MB */
+
+	snprintf(dir, sizeof(dir), "/tmp/pg_sz1mbh_%d", (int)getpid());
+	mkdir(dir, 0755);
+
+	for (int s = 1; s <= 3; s++)
+	{
+		snprintf(seg, sizeof(seg), "%s/0000000100000000%08X", dir, s);
+		write_wal_seg_with_size(seg, 1, (uint64_t)s * sz, sz);
+	}
+
+	wi = scan_wal_archive(dir);
+	ck_assert_ptr_nonnull(wi);
+
+	memset(&bi, 0, sizeof(bi));
+	strcpy(bi.backup_id, "seg-hdr-1mb");
+	bi.timeline  = 1;
+	bi.start_lsn = 1 * (uint64_t)sz;
+	bi.stop_lsn  = 3 * (uint64_t)sz;
+
+	r = check_wal_headers(&bi, wi);
+	free_wal_archive_info(wi);
+
+	char cmd[PATH_MAX + 8];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	(void)system(cmd);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
 /*
  * Test Suite
  */
@@ -2037,6 +2194,7 @@ wal_validator_suite(void)
 	TCase *tc_availability;
 	TCase *tc_redo_lsn;
 	TCase *tc_stream_wal;
+	TCase *tc_seg_size;
 	TCase *tc_rec_crc;
 	TCase *tc_arch_headers;
 	TCase *tc_restore_chain;
@@ -2068,6 +2226,12 @@ wal_validator_suite(void)
 	tcase_add_test(tc_stream_wal, test_stream_wal_missing_segment);
 	tcase_add_test(tc_stream_wal, test_stream_wal_empty_dir);
 	suite_add_tcase(s, tc_stream_wal);
+
+	/* Non-standard WAL segment size unit tests (BUG-002 fix) */
+	tc_seg_size = tcase_create("seg_size");
+	tcase_add_test(tc_seg_size, test_seg_size_1mb_avail);
+	tcase_add_test(tc_seg_size, test_seg_size_1mb_headers);
+	suite_add_tcase(s, tc_seg_size);
 
 	/* Per-record CRC unit tests */
 	tc_rec_crc = tcase_create("record_crc");

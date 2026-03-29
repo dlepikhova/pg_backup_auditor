@@ -171,6 +171,59 @@ crc32c_update(uint32_t crc, const uint8_t *buf, size_t len)
 #define WAL_MAXALIGN(n)  (((uint32_t)(n) + 7U) & ~7U)
 
 /*
+ * detect_wal_segment_size
+ *
+ * Read xlp_seg_size from the first reachable WAL segment in the archive.
+ * Returns the value if it is a valid power-of-two in [1 MB, 1 GB].
+ * Falls back to the standard 16 MB (0x1000000) if the archive is empty,
+ * no segment file can be opened, or the stored value looks invalid.
+ */
+static uint32_t
+detect_wal_segment_size(WALArchiveInfo *wal_info)
+{
+	char		seg_path[PATH_MAX];
+	char		seg_filename[32];
+	FILE	   *fp;
+	uint8_t		buf[WAL_LONG_HDR_SIZE];
+	uint32_t	seg_size;
+	int			i;
+
+	if (wal_info == NULL || wal_info->segment_count == 0)
+		return 0x1000000;	/* default 16 MB */
+
+	for (i = 0; i < wal_info->segment_count; i++)
+	{
+		format_wal_filename(&wal_info->segments[i], seg_filename,
+							sizeof(seg_filename));
+		path_join(seg_path, sizeof(seg_path),
+				  wal_info->archive_path, seg_filename);
+
+		fp = fopen(seg_path, "rb");
+		if (fp == NULL)
+			continue;
+
+		if (fread(buf, 1, sizeof(buf), fp) == sizeof(buf))
+		{
+			fclose(fp);
+			seg_size = read_u32le(buf, WAL_OFF_SEG_SIZE);
+			/* Accept only a power-of-two in [1 MB, 1 GB] */
+			if (seg_size != 0 &&
+				(seg_size & (seg_size - 1)) == 0 &&
+				seg_size >= (1U << 20) &&
+				seg_size <= (1U << 30))
+			{
+				return seg_size;
+			}
+			/* Bad value — try next segment */
+		}
+		else
+			fclose(fp);
+	}
+
+	return 0x1000000;	/* fallback */
+}
+
+/*
  * Read and validate the XLogLongPageHeaderData from one WAL segment,
  * plus CRC32C of the first XLogRecord if it fits in the read buffer.
  * Returns true if everything looks valid.
@@ -794,8 +847,10 @@ check_wal_availability(BackupInfo *backup, WALArchiveInfo *wal_info)
 		return result;
 	}
 
-	/* Convert LSNs to segment names
-	 * Use default 16MB segment size (0x1000000).
+	/* Detect segment size from the archive; fall back to 16 MB if unavailable. */
+	uint32_t seg_size = detect_wal_segment_size(wal_info);
+
+	/* Convert LSNs to segment names.
 	 *
 	 * Use redo_lsn as the effective start when it falls in an earlier segment
 	 * than start_lsn.  redo_lsn is parsed from database/backup_label
@@ -810,8 +865,8 @@ check_wal_availability(BackupInfo *backup, WALArchiveInfo *wal_info)
 		{
 			WALSegmentName redo_seg, chk_seg;
 
-			lsn_to_seg(backup->redo_lsn,  backup->timeline, &redo_seg, 0x1000000);
-			lsn_to_seg(backup->start_lsn, backup->timeline, &chk_seg,  0x1000000);
+			lsn_to_seg(backup->redo_lsn,  backup->timeline, &redo_seg, seg_size);
+			lsn_to_seg(backup->start_lsn, backup->timeline, &chk_seg,  seg_size);
 
 			if (redo_seg.log_id < chk_seg.log_id ||
 				(redo_seg.log_id == chk_seg.log_id &&
@@ -823,9 +878,9 @@ check_wal_availability(BackupInfo *backup, WALArchiveInfo *wal_info)
 						  backup->backup_id);
 			}
 		}
-		lsn_to_seg(eff_start, backup->timeline, &start_seg, 0x1000000);
+		lsn_to_seg(eff_start, backup->timeline, &start_seg, seg_size);
 	}
-	lsn_to_seg(backup->stop_lsn, backup->timeline, &stop_seg, 0x1000000);
+	lsn_to_seg(backup->stop_lsn, backup->timeline, &stop_seg, seg_size);
 
 	log_debug("Checking WAL availability for backup %s", backup->backup_id);
 	format_lsn(backup->start_lsn, lsn_buf, sizeof(lsn_buf));
@@ -919,7 +974,6 @@ free_wal_gaps(WALGap *gaps)
  *   - Validate: non-zero magic, XLP_LONG_HEADER flag, matching timeline,
  *     matching page address, and a plausible segment size value.
  *
- * NOTE: Uses hardcoded 16 MB (0x1000000) segment size — see BUG-002.
  */
 ValidationResult*
 check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info)
@@ -929,6 +983,7 @@ check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info)
 	char				seg_filename[32];
 	char				seg_path[PATH_MAX];
 	int					checked = 0;
+	uint32_t			seg_size;
 
 	if (backup == NULL || wal_info == NULL)
 		return NULL;
@@ -942,6 +997,9 @@ check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info)
 	if (backup->start_lsn == 0 && backup->stop_lsn == 0)
 		return result;  /* No LSN info — nothing to check */
 
+	/* Detect segment size from the archive; fall back to 16 MB if unavailable. */
+	seg_size = detect_wal_segment_size(wal_info);
+
 	/* Use redo_lsn as effective start when it falls in an earlier segment */
 	{
 		XLogRecPtr eff_start = backup->start_lsn;
@@ -950,17 +1008,17 @@ check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info)
 		{
 			WALSegmentName redo_seg, chk_seg;
 
-			lsn_to_seg(backup->redo_lsn,  backup->timeline, &redo_seg, 0x1000000);
-			lsn_to_seg(backup->start_lsn, backup->timeline, &chk_seg,  0x1000000);
+			lsn_to_seg(backup->redo_lsn,  backup->timeline, &redo_seg, seg_size);
+			lsn_to_seg(backup->start_lsn, backup->timeline, &chk_seg,  seg_size);
 
 			if (redo_seg.log_id < chk_seg.log_id ||
 				(redo_seg.log_id == chk_seg.log_id &&
 				 redo_seg.seg_id  < chk_seg.seg_id))
 				eff_start = backup->redo_lsn;
 		}
-		lsn_to_seg(eff_start,         backup->timeline, &start_seg, 0x1000000);
+		lsn_to_seg(eff_start,         backup->timeline, &start_seg, seg_size);
 	}
-	lsn_to_seg(backup->stop_lsn,  backup->timeline, &stop_seg,  0x1000000);
+	lsn_to_seg(backup->stop_lsn,  backup->timeline, &stop_seg,  seg_size);
 
 	log_debug("Checking WAL headers for backup %s "
 			  "(segments %08X%08X%08X .. %08X%08X%08X)",
@@ -984,7 +1042,7 @@ check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info)
 			 */
 			uint64_t expected_pageaddr =
 				((uint64_t)cur.log_id * 0x100000000ULL + (uint64_t)cur.seg_id)
-				* (uint64_t)0x1000000;
+				* (uint64_t)seg_size;
 
 			int errors_before = result->error_count;
 
@@ -1141,7 +1199,6 @@ compare_backup_by_lsn(const void *a, const void *b)
  * If bridge_start >= bridge_end the backups are adjacent or overlapping and no
  * bridge check is needed.
  *
- * NOTE: Uses hardcoded 16 MB (0x1000000) segment size — see BUG-002.
  */
 ValidationResult*
 check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
@@ -1152,6 +1209,7 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
 	int					chain_errors = 0;
 	char				msg[512];
 	char				lsn_a[32], lsn_b[32];
+	uint32_t			seg_size;
 
 	if (backups == NULL || wal_info == NULL)
 		return NULL;
@@ -1192,6 +1250,9 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
 
 	qsort(arr, (size_t)n, sizeof(*arr), compare_backup_by_lsn);
 
+	/* Detect segment size from the archive; fall back to 16 MB if unavailable. */
+	seg_size = detect_wal_segment_size(wal_info);
+
 	for (i = 0; i < n - 1; i++)
 	{
 		BackupInfo     *prev = arr[i];
@@ -1231,10 +1292,10 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
 			}
 
 			format_lsn(switch_lsn, lsn_sw, sizeof(lsn_sw));
-			lsn_to_seg(prev->stop_lsn,  prev->timeline, &prev_stop_seg,  0x1000000);
-			lsn_to_seg(switch_lsn,      prev->timeline, &switch_seg_old, 0x1000000);
-			lsn_to_seg(switch_lsn,      next->timeline, &switch_seg_new, 0x1000000);
-			lsn_to_seg(next->start_lsn, next->timeline, &next_start_seg, 0x1000000);
+			lsn_to_seg(prev->stop_lsn,  prev->timeline, &prev_stop_seg,  seg_size);
+			lsn_to_seg(switch_lsn,      prev->timeline, &switch_seg_old, seg_size);
+			lsn_to_seg(switch_lsn,      next->timeline, &switch_seg_new, seg_size);
+			lsn_to_seg(next->start_lsn, next->timeline, &next_start_seg, seg_size);
 
 			/* --- 1. Pre-switch bridge on prev->timeline ---
 			 * Range: [prev_stop_seg+1, switch_seg_old]  (inclusive) */
@@ -1300,8 +1361,8 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
 			continue;
 		}
 
-		lsn_to_seg(prev->stop_lsn,  prev->timeline, &stop_seg,  0x1000000);
-		lsn_to_seg(next->start_lsn, next->timeline, &start_seg, 0x1000000);
+		lsn_to_seg(prev->stop_lsn,  prev->timeline, &stop_seg,  seg_size);
+		lsn_to_seg(next->start_lsn, next->timeline, &start_seg, seg_size);
 
 		/*
 		 * Bridge starts one segment after prev's stop segment.
@@ -1373,13 +1434,11 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
  * between backups.
  *
  * For each segment the expected page address is:
- *   (log_id * 2^32 + seg_id) * 0x1000000
- * using the hardcoded 16 MB segment size (see BUG-002).
+ *   (log_id * 2^32 + seg_id) * seg_size
+ * where seg_size is auto-detected from the first readable segment header.
  *
  * Per-record CRC validation is also run on each segment whose page header
  * passes cleanly.
- *
- * NOTE: Uses hardcoded 16 MB (0x1000000) segment size — see BUG-002.
  */
 ValidationResult*
 check_wal_archive_headers(WALArchiveInfo *wal_info)
@@ -1398,6 +1457,9 @@ check_wal_archive_headers(WALArchiveInfo *wal_info)
 
 	result->status = BACKUP_STATUS_OK;
 
+	/* Detect segment size from the archive; fall back to 16 MB if unavailable. */
+	uint32_t seg_size = detect_wal_segment_size(wal_info);
+
 	for (i = 0; i < wal_info->segment_count; i++)
 	{
 		WALSegmentName *seg = &wal_info->segments[i];
@@ -1411,7 +1473,7 @@ check_wal_archive_headers(WALArchiveInfo *wal_info)
 
 		uint64_t expected_pageaddr =
 			((uint64_t)seg->log_id * 0x100000000ULL + (uint64_t)seg->seg_id)
-			* (uint64_t)0x1000000;
+			* (uint64_t)seg_size;
 
 		int errors_before = result->error_count;
 
