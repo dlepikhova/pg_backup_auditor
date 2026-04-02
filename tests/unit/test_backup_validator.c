@@ -465,6 +465,243 @@ START_TEST(test_compressed_file_skips_crc)
 END_TEST
 
 /* ================================================================== *
+ * validate_backup_chain() tests
+ * ================================================================== */
+
+/*
+ * Build a minimal BackupInfo for chain tests.
+ * LSNs are left zero so the LSN-regression check is not triggered unless
+ * the test explicitly sets them.
+ */
+static BackupInfo
+make_chain_bi(const char *id, BackupType type, BackupStatus status,
+			  const char *parent_id)
+{
+	BackupInfo bi;
+	memset(&bi, 0, sizeof(bi));
+	strncpy(bi.backup_id, id, sizeof(bi.backup_id) - 1);
+	/* Empty backup_path: validate_backup_structure() returns NULL (not
+	 * applicable for missing path), so connectivity tests are not polluted
+	 * by missing on-disk files. */
+	bi.backup_path[0] = '\0';
+	bi.type   = type;
+	bi.tool   = BACKUP_TOOL_PG_PROBACKUP;
+	bi.status = status;
+	if (parent_id != NULL)
+		strncpy(bi.parent_backup_id, parent_id,
+				sizeof(bi.parent_backup_id) - 1);
+	return bi;
+}
+
+/* NULL input → NULL */
+START_TEST(test_chain_null_input)
+{
+	ValidationResult *res = validate_backup_chain(NULL, NULL, NULL, VALIDATION_LEVEL_BASIC);
+	ck_assert_ptr_null(res);
+}
+END_TEST
+
+/* Non-pg_probackup tool → chain of one, no pg_probackup-specific checks */
+START_TEST(test_chain_non_probackup)
+{
+	BackupInfo bi = make_chain_bi("B001", BACKUP_TYPE_FULL,
+								  BACKUP_STATUS_OK, NULL);
+	bi.tool = BACKUP_TOOL_PG_BASEBACKUP;
+
+	ValidationResult *res = validate_backup_chain(&bi, NULL, NULL, VALIDATION_LEVEL_BASIC);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count, 0);
+	free_validation_result(res);
+}
+END_TEST
+
+/* FULL, no parent → 0 errors */
+START_TEST(test_chain_full_ok)
+{
+	BackupInfo bi = make_chain_bi("FULL01", BACKUP_TYPE_FULL,
+								  BACKUP_STATUS_OK, NULL);
+
+	ValidationResult *res = validate_backup_chain(&bi, &bi, NULL, VALIDATION_LEVEL_BASIC);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count,   0);
+	ck_assert_int_eq(res->warning_count, 0);
+	ck_assert_int_eq(res->status, BACKUP_STATUS_OK);
+	free_validation_result(res);
+}
+END_TEST
+
+/* FULL with unexpected parent_backup_id → 1 error */
+START_TEST(test_chain_full_unexpected_parent)
+{
+	BackupInfo bi = make_chain_bi("FULL02", BACKUP_TYPE_FULL,
+								  BACKUP_STATUS_OK, "PHANTOM");
+
+	ValidationResult *res = validate_backup_chain(&bi, &bi, NULL, VALIDATION_LEVEL_BASIC);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	ck_assert_ptr_nonnull(strstr(res->errors[0], "unexpected parent_backup_id"));
+	free_validation_result(res);
+}
+END_TEST
+
+/* DELTA → FULL (2-level chain), all OK → 0 errors */
+START_TEST(test_chain_delta_single_ok)
+{
+	BackupInfo full  = make_chain_bi("FULL10", BACKUP_TYPE_FULL,
+									 BACKUP_STATUS_OK, NULL);
+	BackupInfo delta = make_chain_bi("DELT10", BACKUP_TYPE_DELTA,
+									 BACKUP_STATUS_OK, "FULL10");
+	full.next  = NULL;
+	delta.next = &full;
+
+	ValidationResult *res = validate_backup_chain(&delta, &delta, NULL, VALIDATION_LEVEL_BASIC);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count,   0);
+	ck_assert_int_eq(res->warning_count, 0);
+	free_validation_result(res);
+}
+END_TEST
+
+/* DELTA2 → DELTA1 → FULL (3-level chain), all OK → 0 errors */
+START_TEST(test_chain_delta_multi_ok)
+{
+	BackupInfo full   = make_chain_bi("FULL20", BACKUP_TYPE_FULL,
+									  BACKUP_STATUS_OK, NULL);
+	BackupInfo delta1 = make_chain_bi("DELT21", BACKUP_TYPE_DELTA,
+									  BACKUP_STATUS_OK, "FULL20");
+	BackupInfo delta2 = make_chain_bi("DELT22", BACKUP_TYPE_DELTA,
+									  BACKUP_STATUS_OK, "DELT21");
+	full.next   = NULL;
+	delta1.next = &full;
+	delta2.next = &delta1;
+
+	ValidationResult *res = validate_backup_chain(&delta2, &delta2, NULL, VALIDATION_LEVEL_BASIC);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count,   0);
+	ck_assert_int_eq(res->warning_count, 0);
+	free_validation_result(res);
+}
+END_TEST
+
+/* DELTA with no parent_backup_id → 1 error */
+START_TEST(test_chain_no_parent_id)
+{
+	BackupInfo bi = make_chain_bi("DELT30", BACKUP_TYPE_DELTA,
+								  BACKUP_STATUS_OK, NULL);
+
+	ValidationResult *res = validate_backup_chain(&bi, &bi, NULL, VALIDATION_LEVEL_BASIC);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	ck_assert_ptr_nonnull(strstr(res->errors[0], "no parent_backup_id"));
+	free_validation_result(res);
+}
+END_TEST
+
+/* DELTA whose parent_id is not in catalog → 1 error "not found" */
+START_TEST(test_chain_missing_parent)
+{
+	BackupInfo bi = make_chain_bi("DELT40", BACKUP_TYPE_DELTA,
+								  BACKUP_STATUS_OK, "GHOST1");
+
+	ValidationResult *res = validate_backup_chain(&bi, &bi, NULL, VALIDATION_LEVEL_BASIC);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->error_count; i++)
+		if (strstr(res->errors[i], "not found")) found = true;
+	ck_assert_msg(found, "expected error about parent not found");
+	free_validation_result(res);
+}
+END_TEST
+
+/* DELTA whose parent has CORRUPT status → 1 error */
+START_TEST(test_chain_corrupt_parent)
+{
+	BackupInfo full  = make_chain_bi("FULL50", BACKUP_TYPE_FULL,
+									 BACKUP_STATUS_CORRUPT, NULL);
+	BackupInfo delta = make_chain_bi("DELT50", BACKUP_TYPE_DELTA,
+									 BACKUP_STATUS_OK, "FULL50");
+	full.next  = NULL;
+	delta.next = &full;
+
+	ValidationResult *res = validate_backup_chain(&delta, &delta, NULL, VALIDATION_LEVEL_BASIC);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->error_count; i++)
+		if (strstr(res->errors[i], "CORRUPT")) found = true;
+	ck_assert_msg(found, "expected error about CORRUPT parent");
+	free_validation_result(res);
+}
+END_TEST
+
+/* DELTA whose parent has ORPHAN status → 1 error */
+START_TEST(test_chain_orphan_parent)
+{
+	BackupInfo full  = make_chain_bi("FULL60", BACKUP_TYPE_FULL,
+									 BACKUP_STATUS_ORPHAN, NULL);
+	BackupInfo delta = make_chain_bi("DELT60", BACKUP_TYPE_DELTA,
+									 BACKUP_STATUS_OK, "FULL60");
+	full.next  = NULL;
+	delta.next = &full;
+
+	ValidationResult *res = validate_backup_chain(&delta, &delta, NULL, VALIDATION_LEVEL_BASIC);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->error_count; i++)
+		if (strstr(res->errors[i], "ORPHAN")) found = true;
+	ck_assert_msg(found, "expected error about ORPHAN parent");
+	free_validation_result(res);
+}
+END_TEST
+
+/* DELTA with LSN regression vs parent → 1 warning */
+START_TEST(test_chain_lsn_regression)
+{
+	BackupInfo full  = make_chain_bi("FULL70", BACKUP_TYPE_FULL,
+									 BACKUP_STATUS_OK, NULL);
+	BackupInfo delta = make_chain_bi("DELT70", BACKUP_TYPE_DELTA,
+									 BACKUP_STATUS_OK, "FULL70");
+	full.start_lsn  = 0x2000000;
+	full.stop_lsn   = 0x3000000;
+	delta.start_lsn = 0x1000000;  /* earlier than parent.start_lsn — regression */
+	delta.stop_lsn  = 0x2000000;
+	full.next  = NULL;
+	delta.next = &full;
+
+	ValidationResult *res = validate_backup_chain(&delta, &delta, NULL, VALIDATION_LEVEL_BASIC);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count, 0);
+	ck_assert_int_ge(res->warning_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->warning_count; i++)
+		if (strstr(res->warnings[i], "LSN regression")) found = true;
+	ck_assert_msg(found, "expected LSN regression warning");
+	free_validation_result(res);
+}
+END_TEST
+
+/* DELTA pointing to itself → cycle detected → 1 error */
+START_TEST(test_chain_cycle)
+{
+	BackupInfo bi = make_chain_bi("CYCL80", BACKUP_TYPE_DELTA,
+								  BACKUP_STATUS_OK, "CYCL80");
+	bi.next = &bi;  /* points to itself in the list too */
+
+	ValidationResult *res = validate_backup_chain(&bi, &bi, NULL, VALIDATION_LEVEL_BASIC);
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->error_count; i++)
+		if (strstr(res->errors[i], "Circular") ||
+			strstr(res->errors[i], "excessively deep")) found = true;
+	ck_assert_msg(found, "expected cycle/depth error");
+	free_validation_result(res);
+}
+END_TEST
+
+/* ================================================================== *
  * validate_backup_metadata() tests
  * ================================================================== */
 
@@ -622,6 +859,274 @@ START_TEST(test_meta_invalid_lsn)
 }
 END_TEST
 
+/* ================================================================== *
+ * validate_backup_structure() tests
+ * ================================================================== */
+
+/*
+ * Create a minimal pg_probackup backup directory tree.
+ * stream=true  → creates database/pg_wal/ (no backup_label)
+ * stream=false → creates database/backup_label (no pg_wal/)
+ * Always creates: database/, database/database_map,
+ *                 database/global/pg_control, database/PG_VERSION,
+ *                 backup_content.control
+ */
+static void
+make_probackup_structure(const char *bdir, bool stream)
+{
+	char path[PATH_MAX];
+
+	snprintf(path, sizeof(path), "%s/database", bdir);
+	make_dir(path);
+
+	snprintf(path, sizeof(path), "%s/database/database_map", bdir);
+	write_file(path, "{}", 2);
+
+	snprintf(path, sizeof(path), "%s/database/global", bdir);
+	make_dir(path);
+	snprintf(path, sizeof(path), "%s/database/global/pg_control", bdir);
+	write_file(path, "", 0);
+
+	snprintf(path, sizeof(path), "%s/database/PG_VERSION", bdir);
+	write_file(path, "17\n", 3);
+
+	if (stream)
+	{
+		snprintf(path, sizeof(path), "%s/database/pg_wal", bdir);
+		make_dir(path);
+	}
+	else
+	{
+		snprintf(path, sizeof(path), "%s/database/backup_label", bdir);
+		write_file(path, "", 0);
+	}
+
+	snprintf(path, sizeof(path), "%s/backup_content.control", bdir);
+	write_file(path, "{}\n", 3);
+}
+
+static BackupInfo
+make_struct_backup(bool stream)
+{
+	BackupInfo bi;
+	memset(&bi, 0, sizeof(bi));
+	strncpy(bi.backup_id, "STRUCT01", sizeof(bi.backup_id) - 1);
+	strncpy(bi.backup_path, backup_dir, sizeof(bi.backup_path) - 1);
+	bi.type       = BACKUP_TYPE_FULL;
+	bi.tool       = BACKUP_TOOL_PG_PROBACKUP;
+	bi.status     = BACKUP_STATUS_OK;
+	bi.wal_stream = stream;
+	return bi;
+}
+
+/* NULL input → NULL returned */
+START_TEST(test_struct_null_input)
+{
+	ValidationResult *res = validate_backup_structure(NULL);
+	ck_assert_ptr_null(res);
+}
+END_TEST
+
+/* Non-pg_probackup tool → NULL returned */
+START_TEST(test_struct_non_probackup)
+{
+	BackupInfo bi;
+	memset(&bi, 0, sizeof(bi));
+	bi.tool = BACKUP_TOOL_PG_BASEBACKUP;
+	strncpy(bi.backup_path, "/tmp", sizeof(bi.backup_path) - 1);
+
+	ValidationResult *res = validate_backup_structure(&bi);
+	ck_assert_ptr_null(res);
+}
+END_TEST
+
+/* Full archive backup, all files present → 0 errors, 0 warnings */
+START_TEST(test_struct_archive_ok)
+{
+	setup_test_dirs();
+	make_probackup_structure(backup_dir, false);
+
+	BackupInfo       bi  = make_struct_backup(false);
+	ValidationResult *res = validate_backup_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count,   0);
+	ck_assert_int_eq(res->warning_count, 0);
+	ck_assert_int_eq(res->status, BACKUP_STATUS_OK);
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Full stream backup, all files present → 0 errors, 0 warnings */
+START_TEST(test_struct_stream_ok)
+{
+	setup_test_dirs();
+	make_probackup_structure(backup_dir, true);
+
+	BackupInfo       bi  = make_struct_backup(true);
+	ValidationResult *res = validate_backup_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count,   0);
+	ck_assert_int_eq(res->warning_count, 0);
+	ck_assert_int_eq(res->status, BACKUP_STATUS_OK);
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* database/ directory missing → at least 1 error mentioning "database/" */
+START_TEST(test_struct_missing_database_dir)
+{
+	setup_test_dirs();
+
+	/* Create backup_content.control but NOT database/ */
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/backup_content.control", backup_dir);
+	write_file(path, "{}\n", 3);
+
+	BackupInfo       bi  = make_struct_backup(false);
+	ValidationResult *res = validate_backup_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	ck_assert_ptr_nonnull(strstr(res->errors[0], "database/"));
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* database/database_map missing → error mentioning "database_map" */
+START_TEST(test_struct_missing_database_map)
+{
+	setup_test_dirs();
+	make_probackup_structure(backup_dir, false);
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/database/database_map", backup_dir);
+	remove(path);
+
+	BackupInfo       bi  = make_struct_backup(false);
+	ValidationResult *res = validate_backup_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->error_count; i++)
+		if (strstr(res->errors[i], "database_map")) found = true;
+	ck_assert_msg(found, "expected error about database_map");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* database/global/pg_control missing → error mentioning "pg_control" */
+START_TEST(test_struct_missing_pg_control)
+{
+	setup_test_dirs();
+	make_probackup_structure(backup_dir, false);
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/database/global/pg_control", backup_dir);
+	remove(path);
+
+	BackupInfo       bi  = make_struct_backup(false);
+	ValidationResult *res = validate_backup_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->error_count; i++)
+		if (strstr(res->errors[i], "pg_control")) found = true;
+	ck_assert_msg(found, "expected error about pg_control");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Archive mode, backup_label missing → error mentioning "backup_label" */
+START_TEST(test_struct_archive_missing_backup_label)
+{
+	setup_test_dirs();
+	make_probackup_structure(backup_dir, false);
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/database/backup_label", backup_dir);
+	remove(path);
+
+	BackupInfo       bi  = make_struct_backup(false);
+	ValidationResult *res = validate_backup_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->error_count; i++)
+		if (strstr(res->errors[i], "backup_label")) found = true;
+	ck_assert_msg(found, "expected error about backup_label");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Stream mode, database/pg_wal/ missing → warning mentioning "pg_wal" */
+START_TEST(test_struct_stream_missing_pg_wal)
+{
+	setup_test_dirs();
+	make_probackup_structure(backup_dir, true);
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/database/pg_wal", backup_dir);
+	rmdir(path);
+
+	BackupInfo       bi  = make_struct_backup(true);
+	ValidationResult *res = validate_backup_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count, 0);
+	ck_assert_int_ge(res->warning_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->warning_count; i++)
+		if (strstr(res->warnings[i], "pg_wal")) found = true;
+	ck_assert_msg(found, "expected warning about pg_wal");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* backup_content.control missing → warning mentioning it */
+START_TEST(test_struct_missing_content_control)
+{
+	setup_test_dirs();
+	make_probackup_structure(backup_dir, false);
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/backup_content.control", backup_dir);
+	remove(path);
+
+	BackupInfo       bi  = make_struct_backup(false);
+	ValidationResult *res = validate_backup_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count, 0);
+	ck_assert_int_ge(res->warning_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->warning_count; i++)
+		if (strstr(res->warnings[i], "backup_content.control")) found = true;
+	ck_assert_msg(found, "expected warning about backup_content.control");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
 /* ------------------------------------------------------------------ *
  * Suite assembly
  * ------------------------------------------------------------------ */
@@ -649,6 +1154,21 @@ backup_validator_suite(void)
 	tcase_add_test(tc_chk, test_compressed_file_skips_crc);
 	suite_add_tcase(s, tc_chk);
 
+	TCase *tc_chain = tcase_create("validate_backup_chain");
+	tcase_add_test(tc_chain, test_chain_null_input);
+	tcase_add_test(tc_chain, test_chain_non_probackup);
+	tcase_add_test(tc_chain, test_chain_full_ok);
+	tcase_add_test(tc_chain, test_chain_full_unexpected_parent);
+	tcase_add_test(tc_chain, test_chain_delta_single_ok);
+	tcase_add_test(tc_chain, test_chain_delta_multi_ok);
+	tcase_add_test(tc_chain, test_chain_no_parent_id);
+	tcase_add_test(tc_chain, test_chain_missing_parent);
+	tcase_add_test(tc_chain, test_chain_corrupt_parent);
+	tcase_add_test(tc_chain, test_chain_orphan_parent);
+	tcase_add_test(tc_chain, test_chain_lsn_regression);
+	tcase_add_test(tc_chain, test_chain_cycle);
+	suite_add_tcase(s, tc_chain);
+
 	TCase *tc_meta = tcase_create("validate_backup_metadata");
 	tcase_add_test(tc_meta, test_meta_null_info);
 	tcase_add_test(tc_meta, test_meta_valid_backup);
@@ -660,6 +1180,19 @@ backup_validator_suite(void)
 	tcase_add_test(tc_meta, test_meta_invalid_timestamps);
 	tcase_add_test(tc_meta, test_meta_invalid_lsn);
 	suite_add_tcase(s, tc_meta);
+
+	TCase *tc_struct = tcase_create("validate_backup_structure");
+	tcase_add_test(tc_struct, test_struct_null_input);
+	tcase_add_test(tc_struct, test_struct_non_probackup);
+	tcase_add_test(tc_struct, test_struct_archive_ok);
+	tcase_add_test(tc_struct, test_struct_stream_ok);
+	tcase_add_test(tc_struct, test_struct_missing_database_dir);
+	tcase_add_test(tc_struct, test_struct_missing_database_map);
+	tcase_add_test(tc_struct, test_struct_missing_pg_control);
+	tcase_add_test(tc_struct, test_struct_archive_missing_backup_label);
+	tcase_add_test(tc_struct, test_struct_stream_missing_pg_wal);
+	tcase_add_test(tc_struct, test_struct_missing_content_control);
+	suite_add_tcase(s, tc_struct);
 
 	return s;
 }

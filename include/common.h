@@ -87,8 +87,10 @@ void free_wal_archive_info(WALArchiveInfo *info);
 
 /* validator/backup_validator.c - Backup validation */
 ValidationResult* validate_backup_metadata(BackupInfo *info);
+ValidationResult* validate_backup_structure(BackupInfo *backup);
 ValidationResult* check_backup_checksums(BackupInfo *backup);
-ValidationResult* validate_backup_chain(BackupInfo *backup, BackupInfo *all_backups);
+ValidationResult* validate_single_backup(BackupInfo *backup, WALArchiveInfo *wal_info, ValidationLevel level);
+ValidationResult* validate_backup_chain(BackupInfo *backup, BackupInfo *all_backups, WALArchiveInfo *wal_info, ValidationLevel level);
 ValidationResult* check_retention_policy(BackupInfo *backups, int retention_days, int retention_weekly);
 void free_validation_result(ValidationResult *result);
 

@@ -14,8 +14,12 @@ Cross-platform PostgreSQL backup auditor - unified analysis and validation tool 
 - Backup listing with filtering, sorting, grouping by directory
 - Detailed backup info: timing, storage, PostgreSQL metadata (LSN, timeline, WAL)
 - Backup validation with 4 levels (basic → standard → checksums → full):
+  - Level 1 (basic): on-disk structure check (required files and directories present)
   - Level 2 (standard): metadata consistency — timestamps, LSN range, timeline, version
-  - Level 3 (checksums): WAL availability + continuity + timeline history + full WAL header and per-record CRC32C validation
+  - Level 3 (checksums): file-level CRC32C + WAL availability + continuity + restore chain + timeline history + WAL header validation
+  - Level 4 (full): archive-wide WAL header scan (detects segment swaps outside backup LSN ranges)
+- WAL segment size auto-detected from segment headers (supports non-default sizes from 1 MB to 1 GB)
+- STREAM backup WAL validation: embedded `database/pg_wal/` scanned automatically when no `--wal-archive` is given
 - Color output with `--no-color` option
 
 ## Quick Start
@@ -125,23 +129,47 @@ Options:
 
 | Level | Name | Checks |
 |-------|------|--------|
-| 1 | `basic` | File structure, backup chain connectivity, WAL presence in backup |
+| 1 | `basic` | On-disk structure (required files/dirs present), backup chain *(chain: TODO)* |
 | 2 | `standard` | Metadata: timestamps, LSN range, timeline, PostgreSQL version *(default)* |
-| 3 | `checksums` | WAL availability (all required segments present) + WAL header validation |
-| 4 | `full` | All checks + pg_verifybackup |
+| 3 | `checksums` | File-level CRC32C + WAL availability, continuity, restore chain, timeline history, header validation |
+| 4 | `full` | All previous + archive-wide WAL header scan |
 
-**Level 3 WAL checks** (require `--wal-archive` or auto-detected for pg_probackup):
-- WAL availability: every segment in [start_lsn, stop_lsn] exists in the archive
-- WAL continuity: no gaps between consecutive segments in the archive
+**Level 1 structure checks** (pg_probackup):
+- `database/` directory present
+- `database/database_map` — OID→dbname map (always written by pg_probackup)
+- `database/global/pg_control` — required for all backup types
+- `database/backup_label` — required for archive-mode backups (`stream=false`)
+- Warnings: `database/PG_VERSION` missing, `backup_content.control` missing, `database/pg_wal/` missing for stream backups
+
+**Level 3 WAL checks** (require `--wal-archive` or auto-detected):
+- For pg_probackup **archive mode**: WAL path auto-detected via adapter
+- For pg_probackup **stream mode**: `database/pg_wal/` inside the backup directory scanned automatically
+- WAL availability: every segment in [start_lsn, stop_lsn] exists
+- WAL continuity: no gaps between consecutive segments
+- WAL restore chain: archive covers all inter-backup bridges (stop_lsn → next start_lsn)
 - WAL timeline history: `.history` file present for timeline > 1
-- WAL header validation: reads `XLogLongPageHeaderData` (40 bytes) from each segment and verifies:
-  - non-zero magic, `XLP_LONG_HEADER` flag set
-  - timeline matches backup, page address matches segment start
-  - segment size is a valid power of two (1 MB – 1 GB), block size in [512, 65536]
-  - CRC32C of the first `XLogRecord`
-- WAL per-record CRC32C: reads the segment page by page and validates the CRC32C of every complete single-page `XLogRecord`; records that span a page boundary or have `xl_crc=0` (synthetic pg_probackup records) are intentionally skipped
+- WAL header validation per backup: reads `XLogLongPageHeaderData` (40 bytes) and verifies magic, `XLP_LONG_HEADER` flag, timeline, page address, segment size, block size, first-record CRC32C
+- WAL per-record CRC32C: validates every complete single-page `XLogRecord`; multi-page and `xl_crc=0` records are intentionally skipped
+- WAL segment size: auto-detected from `xlp_seg_size` in the segment header (supports 1 MB – 1 GB)
+
+**Level 4 additional checks**:
+- Archive-wide WAL header scan: verifies `xlp_pageaddr` for every segment in the archive, detects segment swaps outside backup LSN ranges
 
 **Output**: per-backup results with [OK] / [WARNING] / [ERROR] labels, summary with Total / Validated / Skipped counts, and overall result (OK / WARNING / FAILED).
+
+#### Planned: map file content validation (pg_probackup)
+
+The following checks are not yet implemented but are on the roadmap:
+
+**`tablespace_map`** (present only when non-default tablespaces exist; format: `<OID> <path>\n`):
+- Parse all entries and verify OIDs are valid integers
+- Verify that `database/pg_tblspc/<OID>/` subdirectory exists inside the backup
+- Detect duplicate OIDs
+
+**`database_map`** (always present; JSON array of `{"dbOid": N, "dbName": "..."}` objects):
+- Parse JSON and validate structure
+- Verify that `database/base/<OID>/` subdirectory exists for each entry (FULL backups)
+- Detect duplicate dbOid values
 
 ### `info`
 
@@ -206,9 +234,10 @@ make run
 
 ### Test Coverage
 
-**Test suite**: 130 unit and integration tests (100% passing)
+**Test suite**: 166 unit and integration tests (100% passing)
 
-- **WAL validator**: availability, continuity, timeline history, header validation, per-record CRC32C (valid / mismatch / invalid tot_len / zero CRC skipped / multi-page skipped)
+- **WAL validator**: availability, continuity, restore chain, archive-wide headers, timeline history, per-backup header validation, per-record CRC32C, WAL segment size auto-detection (1 MB segments), stream backup embedded WAL
+- **Backup validator**: file-level CRC32C checksums, metadata consistency, backup structure (archive mode / stream mode / missing files / missing dirs)
 - **Adapters**: pg_basebackup, pg_probackup (scan, WAL path detection, end-to-end)
 - **Common utilities**: string_utils, xlog (LSN/segment parsing and formatting), INI parser
 - **Integration tests** with synthetic pg_probackup backup catalog (auto-generated; skipped if env vars not set)

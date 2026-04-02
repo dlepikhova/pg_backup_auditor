@@ -290,174 +290,34 @@ cmd_check_main(int argc, char **argv)
 
 		backups_validated++;
 
-		/* Level 1: Basic structure checks + chain validation + WAL presence */
-		if (opts.level >= VALIDATION_LEVEL_BASIC)
+		/* Run full chain validation at the requested level.
+		 * validate_backup_chain() calls validate_single_backup() for every
+		 * link in the chain (structure → metadata → checksums → WAL). */
 		{
-			/* TODO: Add structure validation */
-			log_debug("Structure check not yet implemented");
-
-			/* TODO: Add chain validation */
-			log_debug("Chain validation not yet implemented");
-
-			/* WAL presence check (Level 1) - if backup has WAL metadata */
-			if (!opts.skip_wal && current->wal_start_file[0] != '\0')
+			WALArchiveInfo *chain_wal = opts.skip_wal ? NULL : wal_info;
+			ValidationResult *chain_result =
+				validate_backup_chain(current, backups, chain_wal, opts.level);
+			if (chain_result != NULL)
 			{
-				/* TODO: Check if required WAL files exist in backup */
-				log_debug("WAL presence check not yet implemented");
+				for (int i = 0; i < chain_result->error_count; i++)
+					printf("  %s[ERROR]%s %s\n",
+						   use_color ? COLOR_RED    : "",
+						   use_color ? COLOR_RESET  : "",
+						   chain_result->errors[i]);
+				for (int i = 0; i < chain_result->warning_count; i++)
+					printf("  %s[WARNING]%s %s\n",
+						   use_color ? COLOR_YELLOW : "",
+						   use_color ? COLOR_RESET  : "",
+						   chain_result->warnings[i]);
+				if (chain_result->error_count == 0 &&
+					chain_result->warning_count == 0)
+					printf("  %s[OK]%s Backup validation: passed\n",
+						   use_color ? COLOR_GREEN  : "",
+						   use_color ? COLOR_RESET  : "");
+				total_errors   += chain_result->error_count;
+				total_warnings += chain_result->warning_count;
+				free_validation_result(chain_result);
 			}
-		}
-
-		/* Level 2: Metadata validation */
-		if (opts.level >= VALIDATION_LEVEL_STANDARD)
-		{
-			ValidationResult *metadata_result = validate_backup_metadata(current);
-			if (metadata_result != NULL)
-			{
-				total_errors += metadata_result->error_count;
-				total_warnings += metadata_result->warning_count;
-				free_validation_result(metadata_result);
-			}
-		}
-
-		/* Level 3: Checksums + WAL availability */
-		if (opts.level >= VALIDATION_LEVEL_CHECKSUMS)
-		{
-			/* File-level checksum validation */
-			ValidationResult *chk_result = check_backup_checksums(current);
-			if (chk_result != NULL)
-			{
-				if (chk_result->error_count > 0)
-				{
-					printf("  %s[ERROR]%s Checksum validation failed (%d file%s):\n",
-						   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "",
-						   chk_result->error_count,
-						   chk_result->error_count == 1 ? "" : "s");
-					for (int i = 0; i < chk_result->error_count; i++)
-						printf("          %s\n", chk_result->errors[i]);
-				}
-				else
-				{
-					printf("  %s[OK]%s File checksums: all verified\n",
-						   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
-				}
-				total_errors += chk_result->error_count;
-				free_validation_result(chk_result);
-			}
-
-			/* WAL checks for backups with LSN info */
-			if (!opts.skip_wal && current->start_lsn > 0 && current->stop_lsn > 0)
-			{
-				/* Determine whether we have a WAL archive to check against:
-				 * - archive mode: use wal_info (explicit or auto-detected)
-				 * - stream mode with --wal-archive: use wal_info (explicit)
-				 * - stream mode (pg_probackup): scan database/pg_wal/ inside backup */
-				WALArchiveInfo *effective_wal = NULL;
-				WALArchiveInfo *stream_wal   = NULL;  /* per-backup alloc, freed below */
-
-				if (!current->wal_stream)
-					effective_wal = wal_info;          /* explicit or auto-detected */
-				else if (opts.wal_archive != NULL)
-					effective_wal = wal_info;          /* explicit --wal-archive overrides */
-				else if (current->tool == BACKUP_TOOL_PG_PROBACKUP)
-				{
-					/* pg_probackup stream backup: WAL embedded in database/pg_wal/ */
-					char pg_wal_path[PATH_MAX];
-					path_join(pg_wal_path, sizeof(pg_wal_path),
-							  current->backup_path, "database");
-					path_join(pg_wal_path, sizeof(pg_wal_path),
-							  pg_wal_path, "pg_wal");
-					if (is_directory(pg_wal_path))
-					{
-						stream_wal    = scan_wal_archive(pg_wal_path);
-						effective_wal = stream_wal;
-					}
-				}
-
-				if (effective_wal != NULL)
-				{
-					/* WAL availability check */
-					ValidationResult *wal_result = check_wal_availability(current, effective_wal);
-					if (wal_result != NULL)
-					{
-						if (wal_result->error_count > 0)
-						{
-							printf("  %s[ERROR]%s WAL availability check failed:\n",
-								   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
-							for (int i = 0; i < wal_result->error_count; i++)
-								printf("          %s\n", wal_result->errors[i]);
-						}
-						else
-						{
-							printf("  %s[OK]%s WAL availability: all required segments present\n",
-								   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
-						}
-						total_errors += wal_result->error_count;
-						free_validation_result(wal_result);
-					}
-
-					/* WAL header validation */
-					ValidationResult *hdr_result = check_wal_headers(current, effective_wal);
-					if (hdr_result != NULL)
-					{
-						if (hdr_result->error_count > 0)
-						{
-							printf("  %s[ERROR]%s WAL header validation failed:\n",
-								   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
-							for (int i = 0; i < hdr_result->error_count; i++)
-								printf("          %s\n", hdr_result->errors[i]);
-						}
-						else
-						{
-							printf("  %s[OK]%s WAL headers: all checked segments have valid headers\n",
-								   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
-						}
-						total_errors += hdr_result->error_count;
-						free_validation_result(hdr_result);
-					}
-
-					/* Timeline history file check */
-					ValidationResult *tl_result = check_wal_timeline(current, effective_wal);
-					if (tl_result != NULL)
-					{
-						if (tl_result->error_count > 0)
-						{
-							printf("  %s[ERROR]%s WAL timeline check failed:\n",
-								   use_color ? COLOR_RED : "", use_color ? COLOR_RESET : "");
-							for (int i = 0; i < tl_result->error_count; i++)
-								printf("          %s\n", tl_result->errors[i]);
-						}
-						else if (current->timeline > 1)
-						{
-							printf("  %s[OK]%s WAL timeline: history file present\n",
-								   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
-						}
-						total_errors += tl_result->error_count;
-						free_validation_result(tl_result);
-					}
-				}
-				else if (current->wal_stream)
-				{
-					/* Stream backup: no --wal-archive and database/pg_wal/ not found */
-					printf("  %s[WARNING]%s WAL not verified: stream backup, "
-						   "no --wal-archive provided and database/pg_wal/ not found\n",
-						   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "");
-					total_warnings++;
-				}
-				/* archive mode with wal_info == NULL: auto-detection failed, skip silently */
-
-				if (stream_wal != NULL)
-				{
-					free_wal_archive_info(stream_wal);
-					stream_wal = NULL;
-				}
-			}
-		}
-
-		/* Level 4: Full validation (pg_verifybackup, etc.) */
-		if (opts.level >= VALIDATION_LEVEL_FULL)
-		{
-			/* TODO: Add full validation (pg_verifybackup, etc.) */
-			log_debug("Full validation not yet implemented");
 		}
 
 		current = current->next;
