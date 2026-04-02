@@ -247,11 +247,15 @@ validate_backup_structure(BackupInfo *backup)
 						  "(required for archive-mode backup)");
 		}
 
-		/* database/PG_VERSION */
-		path_join(path, sizeof(path), backup->backup_path, "database");
-		path_join(path, sizeof(path), path, "PG_VERSION");
-		if (!file_exists(path))
-			add_warning(result, "Missing database/PG_VERSION");
+		/* database/PG_VERSION — only present in FULL backups;
+		 * pg_probackup skips unchanged files in DELTA/PAGE/PTRACK */
+		if (backup->type == BACKUP_TYPE_FULL)
+		{
+			path_join(path, sizeof(path), backup->backup_path, "database");
+			path_join(path, sizeof(path), path, "PG_VERSION");
+			if (!file_exists(path))
+				add_warning(result, "Missing database/PG_VERSION");
+		}
 
 		/* database/pg_wal/ (STREAM mode) */
 		if (backup->wal_stream)
@@ -364,18 +368,16 @@ validate_single_backup(BackupInfo *backup, WALArchiveInfo *wal_info,
 		{
 			if (!backup->wal_stream)
 			{
-				/* Archive mode: caller provides wal_info */
-				effective_wal = wal_info;
-			}
-			else if (wal_info != NULL)
-			{
-				/* Explicit --wal-archive overrides embedded WAL */
+				/* Archive mode: use external wal_info */
 				effective_wal = wal_info;
 			}
 			else if (backup->tool == BACKUP_TOOL_PG_PROBACKUP &&
 					 backup->backup_path[0] != '\0')
 			{
-				/* Stream mode: scan embedded database/pg_wal/ */
+				/* Stream mode: WAL is embedded in database/pg_wal/.
+				 * Always prefer embedded WAL — the external archive may
+				 * be missing segments that the stream backup carries
+				 * internally, and the backup is self-sufficient. */
 				char pg_wal_path[PATH_MAX];
 				path_join(pg_wal_path, sizeof(pg_wal_path),
 						  backup->backup_path, "database");
@@ -386,6 +388,12 @@ validate_single_backup(BackupInfo *backup, WALArchiveInfo *wal_info,
 					stream_wal    = scan_wal_archive(pg_wal_path);
 					effective_wal = stream_wal;
 				}
+				else
+					effective_wal = wal_info;  /* fallback if pg_wal/ absent */
+			}
+			else if (wal_info != NULL)
+			{
+				effective_wal = wal_info;
 			}
 
 			if (effective_wal != NULL)
@@ -515,7 +523,6 @@ validate_backup_chain(BackupInfo *backup, BackupInfo *all_backups,
 		{
 			const char *pid    = current->parent_backup_id;
 			BackupInfo *parent = NULL;
-			char        prefix[80];
 
 			if (pid[0] == '\0')
 			{
@@ -559,13 +566,28 @@ validate_backup_chain(BackupInfo *backup, BackupInfo *all_backups,
 			}
 
 			/* Validate the parent backup */
-			snprintf(prefix, sizeof(prefix), "Parent %s", parent->backup_id);
 			{
 				ValidationResult *pr = validate_single_backup(parent, wal_info,
 															  level);
 				if (pr != NULL)
 				{
-					merge_result(result, pr, prefix);
+					if (pr->error_count > 0)
+					{
+						snprintf(msg, sizeof(msg),
+								 "Ancestor %s has validation errors — "
+								 "chain recovery may fail",
+								 parent->backup_id);
+						add_warning(result, msg);
+						free_validation_result(pr);
+						break;  /* no point walking further */
+					}
+					else if (pr->warning_count > 0)
+					{
+						snprintf(msg, sizeof(msg),
+								 "Ancestor %s has validation warnings",
+								 parent->backup_id);
+						add_warning(result, msg);
+					}
 					free_validation_result(pr);
 				}
 			}
