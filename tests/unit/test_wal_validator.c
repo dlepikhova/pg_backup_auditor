@@ -896,6 +896,37 @@ test_crc32c(const uint8_t *buf, size_t len)
 }
 
 /*
+ * Compute xl_crc for an XLogRecord following PostgreSQL's order:
+ *   1. payload bytes [24 .. xl_tot_len-1]
+ *   2. header bytes  [0  .. 19]
+ */
+static uint32_t
+test_xlog_crc(const uint8_t *rec, uint32_t xl_tot_len)
+{
+	static const uint32_t poly = 0x82F63B78U;
+	uint32_t crc = ~0U;
+	uint32_t i;
+	int j;
+
+#define CRC_BYTE(b) do { \
+		crc ^= (b); \
+		for (j = 0; j < 8; j++) \
+			crc = (crc & 1) ? ((crc >> 1) ^ poly) : (crc >> 1); \
+	} while (0)
+
+	/* 1. payload */
+	for (i = 24; i < xl_tot_len; i++)
+		CRC_BYTE(rec[i]);
+
+	/* 2. header [0..19] */
+	for (i = 0; i < 20; i++)
+		CRC_BYTE(rec[i]);
+
+#undef CRC_BYTE
+	return ~crc;
+}
+
+/*
  * Write a WAL segment file to `path` consisting of a 40-byte long page
  * header followed by `nrecs` minimal 24-byte XLogRecord entries.
  *
@@ -967,14 +998,14 @@ write_rec_test_seg(const char *path, int nrecs, int bad_crc_idx, int bad_totlen_
 		rec[2] = (uint8_t)((tot_len >> 16) & 0xFF);
 		rec[3] = (uint8_t)((tot_len >> 24) & 0xFF);
 
-		/* xl_crc at offset 20 — compute over bytes [0..19] */
+		/* xl_crc at offset 20 — PostgreSQL order: payload then header */
 		if (zero_crc)
 		{
 			crc_val = 0;
 		}
 		else
 		{
-			crc_val = test_crc32c(rec, 20);  /* rec[20..23] still 0 at this point */
+			crc_val = test_xlog_crc(rec, tot_len);  /* rec[20..23] still 0 */
 			if (i == bad_crc_idx)
 				crc_val ^= 0xDEADBEEF;
 		}
@@ -1137,6 +1168,114 @@ START_TEST(test_rec_crc_multipage_skipped)
 
 	ck_assert_ptr_nonnull(r);
 	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/* -------------------------------------------------------------------------
+ * CRC-with-payload tests
+ *
+ * Records with xl_tot_len > 24 have a non-empty payload.  The CRC must be
+ * computed in PostgreSQL order: payload first, then the 20-byte header.
+ * These tests verify that the validator uses the correct order.
+ * ------------------------------------------------------------------------- */
+
+/*
+ * Write a segment containing one record with `payload_len` bytes of payload
+ * (all 0xAB), optionally corrupted.
+ */
+static void
+write_payload_seg(const char *path, uint32_t payload_len, bool corrupt_crc)
+{
+	FILE    *f;
+	uint8_t  hdr[40] = {0};
+	uint32_t tot_len = 24 + payload_len;
+	uint32_t crc_val;
+	uint8_t *rec;
+
+	/* page header */
+	hdr[0] = 0x71; hdr[1] = 0xD0;          /* xlp_magic */
+	hdr[2] = 0x02; hdr[3] = 0x00;          /* XLP_LONG_HEADER */
+	hdr[4] = 0x01;                          /* xlp_tli = 1 */
+	hdr[8]  = 0x00; hdr[9]  = 0x00;
+	hdr[10] = 0x00; hdr[11] = 0x01;        /* xlp_pageaddr = 0x1000000 */
+	hdr[24] = 0x01;                         /* xlp_sysid = 1 */
+	hdr[32] = 0x00; hdr[33] = 0x00;
+	hdr[34] = 0x00; hdr[35] = 0x01;        /* xlp_seg_size = 16 MB */
+	hdr[36] = 0x00; hdr[37] = 0x20;        /* xlp_xlog_blcksz = 8192 */
+
+	rec = calloc(1, tot_len);
+	if (rec == NULL) return;
+
+	rec[0] = (uint8_t)(tot_len & 0xFF);
+	rec[1] = (uint8_t)((tot_len >> 8) & 0xFF);
+
+	/* fill payload with 0xAB */
+	memset(rec + 24, 0xAB, payload_len);
+
+	crc_val = test_xlog_crc(rec, tot_len);
+	if (corrupt_crc)
+		crc_val ^= 0xDEADBEEF;
+
+	rec[20] = (uint8_t)(crc_val & 0xFF);
+	rec[21] = (uint8_t)((crc_val >> 8) & 0xFF);
+	rec[22] = (uint8_t)((crc_val >> 16) & 0xFF);
+	rec[23] = (uint8_t)((crc_val >> 24) & 0xFF);
+
+	f = fopen(path, "wb");
+	if (f == NULL) { free(rec); return; }
+
+	fwrite(hdr, 1, sizeof(hdr), f);
+	fwrite(rec, 1, tot_len, f);
+	free(rec);
+
+	/* extend to full 16 MB */
+	(void)fseek(f, (long)0x1000000 - 1, SEEK_SET);
+	(void)fputc('\0', f);
+	fclose(f);
+}
+
+/* Record with 6-byte payload and correct CRC → no errors */
+START_TEST(test_rec_crc_payload_valid)
+{
+	char           dir[64];
+	char           seg[PATH_MAX];
+	BackupInfo     bi;
+	WALArchiveInfo wi;
+	ValidationResult *r;
+
+	rec_test_setup(dir, sizeof(dir), &bi, &wi);
+	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	write_payload_seg(seg, 6, false);
+
+	r = check_wal_headers(&bi, &wi);
+	rec_test_teardown(dir);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	free_validation_result(r);
+}
+END_TEST
+
+/* Record with 6-byte payload and corrupted CRC → 1 error */
+START_TEST(test_rec_crc_payload_mismatch)
+{
+	char           dir[64];
+	char           seg[PATH_MAX];
+	BackupInfo     bi;
+	WALArchiveInfo wi;
+	ValidationResult *r;
+
+	rec_test_setup(dir, sizeof(dir), &bi, &wi);
+	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	write_payload_seg(seg, 6, true);
+
+	r = check_wal_headers(&bi, &wi);
+	rec_test_teardown(dir);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_ge(r->error_count, 1);
+	ck_assert(strstr(r->errors[0], "CRC mismatch") != NULL);
 	free_validation_result(r);
 }
 END_TEST
@@ -2240,6 +2379,8 @@ wal_validator_suite(void)
 	tcase_add_test(tc_rec_crc, test_rec_crc_invalid_totlen);
 	tcase_add_test(tc_rec_crc, test_rec_crc_zero_skipped);
 	tcase_add_test(tc_rec_crc, test_rec_crc_multipage_skipped);
+	tcase_add_test(tc_rec_crc, test_rec_crc_payload_valid);
+	tcase_add_test(tc_rec_crc, test_rec_crc_payload_mismatch);
 	suite_add_tcase(s, tc_rec_crc);
 
 	/* Archive-wide header validation unit tests (BUG-003 fix) */

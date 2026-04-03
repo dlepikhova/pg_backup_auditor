@@ -1127,6 +1127,281 @@ START_TEST(test_struct_missing_content_control)
 }
 END_TEST
 
+/* ================================================================== *
+ * pg_basebackup_validate_structure() and
+ * pg_basebackup_get_embedded_wal() tests
+ * ================================================================== */
+
+static void
+make_basebackup_plain_structure(const char *bdir, bool stream)
+{
+	char path[PATH_MAX];
+
+	snprintf(path, sizeof(path), "%s/base", bdir);
+	make_dir(path);
+
+	snprintf(path, sizeof(path), "%s/global", bdir);
+	make_dir(path);
+	snprintf(path, sizeof(path), "%s/global/pg_control", bdir);
+	write_file(path, "", 0);
+
+	snprintf(path, sizeof(path), "%s/backup_label", bdir);
+	write_file(path, "START WAL LOCATION: 0/1000028\n", 30);
+
+	if (stream)
+	{
+		snprintf(path, sizeof(path), "%s/pg_wal", bdir);
+		make_dir(path);
+	}
+}
+
+static void
+make_basebackup_tar_structure(const char *bdir, bool stream)
+{
+	char path[PATH_MAX];
+
+	snprintf(path, sizeof(path), "%s/base.tar", bdir);
+	write_file(path, "", 0);
+
+	if (stream)
+	{
+		snprintf(path, sizeof(path), "%s/pg_wal.tar", bdir);
+		write_file(path, "", 0);
+	}
+}
+
+static BackupInfo
+make_bb_backup(bool stream)
+{
+	BackupInfo bi;
+	memset(&bi, 0, sizeof(bi));
+	strncpy(bi.backup_id, "BB000001", sizeof(bi.backup_id) - 1);
+	strncpy(bi.backup_path, backup_dir, sizeof(bi.backup_path) - 1);
+	bi.type       = BACKUP_TYPE_FULL;
+	bi.tool       = BACKUP_TOOL_PG_BASEBACKUP;
+	bi.status     = BACKUP_STATUS_OK;
+	bi.wal_stream = stream;
+	return bi;
+}
+
+/* NULL input → NULL */
+START_TEST(test_bb_struct_null_input)
+{
+	ValidationResult *res = pg_basebackup_validate_structure(NULL);
+	ck_assert_ptr_null(res);
+}
+END_TEST
+
+/* Plain: all required files present, archive mode → 0 errors, 0 warnings */
+START_TEST(test_bb_struct_plain_ok)
+{
+	setup_test_dirs();
+	make_basebackup_plain_structure(backup_dir, false);
+
+	BackupInfo        bi  = make_bb_backup(false);
+	ValidationResult *res = pg_basebackup_validate_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count,   0);
+	ck_assert_int_eq(res->warning_count, 0);
+	ck_assert_int_eq(res->status, BACKUP_STATUS_OK);
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Plain: base/ missing → error mentioning "base/" */
+START_TEST(test_bb_struct_plain_missing_base)
+{
+	setup_test_dirs();
+	make_basebackup_plain_structure(backup_dir, false);
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/base", backup_dir);
+	rmdir(path);
+
+	BackupInfo        bi  = make_bb_backup(false);
+	ValidationResult *res = pg_basebackup_validate_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->error_count; i++)
+		if (strstr(res->errors[i], "base/")) found = true;
+	ck_assert_msg(found, "expected error about missing base/");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Plain: global/pg_control missing → error mentioning "pg_control" */
+START_TEST(test_bb_struct_plain_missing_pg_control)
+{
+	setup_test_dirs();
+	make_basebackup_plain_structure(backup_dir, false);
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/global/pg_control", backup_dir);
+	remove(path);
+
+	BackupInfo        bi  = make_bb_backup(false);
+	ValidationResult *res = pg_basebackup_validate_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->error_count; i++)
+		if (strstr(res->errors[i], "pg_control")) found = true;
+	ck_assert_msg(found, "expected error about missing pg_control");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Plain: backup_label AND backup_manifest both absent → error */
+START_TEST(test_bb_struct_plain_missing_label)
+{
+	setup_test_dirs();
+	make_basebackup_plain_structure(backup_dir, false);
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/backup_label", backup_dir);
+	remove(path);
+	/* backup_manifest was never created */
+
+	BackupInfo        bi  = make_bb_backup(false);
+	ValidationResult *res = pg_basebackup_validate_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->error_count; i++)
+		if (strstr(res->errors[i], "backup_label") ||
+			strstr(res->errors[i], "backup_manifest")) found = true;
+	ck_assert_msg(found, "expected error about missing backup_label/manifest");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Plain: stream backup, pg_wal/ missing → warning mentioning "pg_wal" */
+START_TEST(test_bb_struct_plain_stream_missing_pg_wal)
+{
+	setup_test_dirs();
+	make_basebackup_plain_structure(backup_dir, true);
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/pg_wal", backup_dir);
+	rmdir(path);
+
+	BackupInfo        bi  = make_bb_backup(true);
+	ValidationResult *res = pg_basebackup_validate_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count, 0);
+	ck_assert_int_ge(res->warning_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->warning_count; i++)
+		if (strstr(res->warnings[i], "pg_wal")) found = true;
+	ck_assert_msg(found, "expected warning about missing pg_wal/");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Tar: base.tar present, archive mode → 0 errors */
+START_TEST(test_bb_struct_tar_ok)
+{
+	setup_test_dirs();
+	make_basebackup_tar_structure(backup_dir, false);
+
+	BackupInfo        bi  = make_bb_backup(false);
+	ValidationResult *res = pg_basebackup_validate_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count, 0);
+	ck_assert_int_eq(res->status, BACKUP_STATUS_OK);
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Tar: stream backup, pg_wal.tar missing → warning mentioning "pg_wal" */
+START_TEST(test_bb_struct_tar_stream_missing_pg_wal)
+{
+	setup_test_dirs();
+	make_basebackup_tar_structure(backup_dir, false);   /* no pg_wal.tar */
+
+	BackupInfo        bi  = make_bb_backup(true);        /* stream=true */
+	ValidationResult *res = pg_basebackup_validate_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count, 0);
+	ck_assert_int_ge(res->warning_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->warning_count; i++)
+		if (strstr(res->warnings[i], "pg_wal")) found = true;
+	ck_assert_msg(found, "expected warning about missing pg_wal.tar");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* NULL input → NULL */
+START_TEST(test_bb_wal_null_input)
+{
+	WALArchiveInfo *info = pg_basebackup_get_embedded_wal(NULL);
+	ck_assert_ptr_null(info);
+}
+END_TEST
+
+/* Archive-mode backup (wal_stream=false) → NULL */
+START_TEST(test_bb_wal_archive_mode)
+{
+	BackupInfo      bi   = make_bb_backup(false);
+	WALArchiveInfo *info = pg_basebackup_get_embedded_wal(&bi);
+	ck_assert_ptr_null(info);
+}
+END_TEST
+
+/* Stream backup, plain format, pg_wal/ present → non-NULL */
+START_TEST(test_bb_wal_plain_stream_ok)
+{
+	setup_test_dirs();
+	make_basebackup_plain_structure(backup_dir, true);
+
+	BackupInfo      bi   = make_bb_backup(true);
+	WALArchiveInfo *info = pg_basebackup_get_embedded_wal(&bi);
+
+	ck_assert_ptr_nonnull(info);
+	free_wal_archive_info(info);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Stream backup, plain format, pg_wal/ absent → NULL */
+START_TEST(test_bb_wal_plain_stream_missing)
+{
+	setup_test_dirs();
+	make_basebackup_plain_structure(backup_dir, false);  /* no pg_wal/ */
+
+	BackupInfo      bi   = make_bb_backup(true);          /* stream=true, no dir */
+	WALArchiveInfo *info = pg_basebackup_get_embedded_wal(&bi);
+
+	ck_assert_ptr_null(info);
+
+	teardown_test_dirs();
+}
+END_TEST
+
 /* ------------------------------------------------------------------ *
  * Suite assembly
  * ------------------------------------------------------------------ */
@@ -1193,6 +1468,44 @@ backup_validator_suite(void)
 	tcase_add_test(tc_struct, test_struct_stream_missing_pg_wal);
 	tcase_add_test(tc_struct, test_struct_missing_content_control);
 	suite_add_tcase(s, tc_struct);
+
+	/* ------------------------------------------------------------------ *
+	 * pg_basebackup_validate_structure tests
+	 * ------------------------------------------------------------------ */
+	TCase *tc_bb_struct = tcase_create("pg_basebackup_validate_structure");
+
+	/* NULL input → NULL */
+	tcase_add_test(tc_bb_struct, test_bb_struct_null_input);
+	/* Plain: all required files present → 0 errors, 0 warnings */
+	tcase_add_test(tc_bb_struct, test_bb_struct_plain_ok);
+	/* Plain: missing base/ → error */
+	tcase_add_test(tc_bb_struct, test_bb_struct_plain_missing_base);
+	/* Plain: missing global/pg_control → error */
+	tcase_add_test(tc_bb_struct, test_bb_struct_plain_missing_pg_control);
+	/* Plain: missing backup_label AND backup_manifest → error */
+	tcase_add_test(tc_bb_struct, test_bb_struct_plain_missing_label);
+	/* Plain: stream backup missing pg_wal/ → warning */
+	tcase_add_test(tc_bb_struct, test_bb_struct_plain_stream_missing_pg_wal);
+	/* Tar: base.tar present → 0 errors */
+	tcase_add_test(tc_bb_struct, test_bb_struct_tar_ok);
+	/* Tar: stream backup missing pg_wal.tar → warning */
+	tcase_add_test(tc_bb_struct, test_bb_struct_tar_stream_missing_pg_wal);
+	suite_add_tcase(s, tc_bb_struct);
+
+	/* ------------------------------------------------------------------ *
+	 * pg_basebackup_get_embedded_wal tests
+	 * ------------------------------------------------------------------ */
+	TCase *tc_bb_wal = tcase_create("pg_basebackup_get_embedded_wal");
+
+	/* NULL input → NULL */
+	tcase_add_test(tc_bb_wal, test_bb_wal_null_input);
+	/* Archive-mode backup → NULL (no embedded WAL) */
+	tcase_add_test(tc_bb_wal, test_bb_wal_archive_mode);
+	/* Stream backup, plain format, pg_wal/ present → non-NULL */
+	tcase_add_test(tc_bb_wal, test_bb_wal_plain_stream_ok);
+	/* Stream backup, plain format, pg_wal/ absent → NULL */
+	tcase_add_test(tc_bb_wal, test_bb_wal_plain_stream_missing);
+	suite_add_tcase(s, tc_bb_wal);
 
 	return s;
 }

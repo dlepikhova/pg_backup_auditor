@@ -437,14 +437,21 @@ validate_wal_segment_header(const char *seg_path,
 			{
 				uint32_t crc = ~0U;
 
-				/* Bytes 0..19 of the record (header fields before xl_crc) */
-				crc = crc32c_update(crc, rec, 20);
+				/*
+				 * PostgreSQL computes xl_crc in the following order:
+				 *   1. data payload: bytes [SizeOfXLogRecord .. xl_tot_len-1]
+				 *   2. record header: bytes [0 .. offsetof(xl_crc)-1] = [0..19]
+				 * We must follow the same order.
+				 */
 
-				/* Bytes 24..xl_tot_len-1 (data payload; skip xl_crc at 20..23) */
+				/* 1. Data payload: bytes 24..xl_tot_len-1 */
 				if (xl_tot_len > (uint32_t) WAL_XLOG_HDR_SIZE)
 					crc = crc32c_update(crc,
 										rec + WAL_XLOG_HDR_SIZE,
 										xl_tot_len - WAL_XLOG_HDR_SIZE);
+
+				/* 2. Record header bytes 0..19 (before xl_crc) */
+				crc = crc32c_update(crc, rec, 20);
 
 				uint32_t computed_crc = ~crc;
 
@@ -602,14 +609,16 @@ validate_wal_segment_records(const char *seg_path,
 				if (!crc32c_table_initialized)
 					init_crc32c_table();
 
-				/* Bytes [0..19] — header fields before xl_crc */
-				crc = crc32c_update(crc, rec, 20);
+				/* PostgreSQL order: payload first, then header */
 
-				/* Bytes [24..xl_tot_len-1] — data payload after xl_crc */
+				/* 1. Bytes [24..xl_tot_len-1] — data payload */
 				if (xl_tot_len > (uint32_t) WAL_XLOG_HDR_SIZE)
 					crc = crc32c_update(crc,
 										rec + WAL_XLOG_HDR_SIZE,
 										xl_tot_len - WAL_XLOG_HDR_SIZE);
+
+				/* 2. Bytes [0..19] — header fields before xl_crc */
+				crc = crc32c_update(crc, rec, 20);
 
 				computed_crc = ~crc;
 
