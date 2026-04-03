@@ -999,8 +999,13 @@ write_rec_test_seg(const char *path, int nrecs, int bad_crc_idx, int bad_totlen_
 		rec[3] = (uint8_t)((tot_len >> 24) & 0xFF);
 
 		/* xl_crc at offset 20 — PostgreSQL order: payload then header */
-		if (zero_crc)
+		if (zero_crc || tot_len > (uint32_t) sizeof(rec))
 		{
+			/*
+			 * For oversized records (tot_len > sizeof(rec)) we can't compute
+			 * a real CRC without a matching payload buffer.  The validator
+			 * skips multi-page records anyway, so zero is fine.
+			 */
 			crc_val = 0;
 		}
 		else
