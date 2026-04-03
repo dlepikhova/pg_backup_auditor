@@ -40,8 +40,13 @@ typedef struct BackupAdapter {
 	/* Get WAL archive path for this backup */
 	char* (*get_wal_archive_path)(const char *backup_path, const char *instance_name);
 
-	/* Validate backup */
-	ValidationResult* (*validate)(BackupInfo *info, WALArchiveInfo *wal);
+	/* Validate on-disk structure (file presence, format correctness).
+	 * Returns NULL if not applicable for this tool. */
+	ValidationResult* (*validate_structure)(BackupInfo *backup);
+
+	/* Return embedded WAL for stream-mode backups, or NULL if the backup
+	 * relies on an external archive.  Caller must free the result. */
+	WALArchiveInfo* (*get_embedded_wal)(BackupInfo *backup);
 
 	/* Cleanup */
 	void (*cleanup)(BackupInfo *info);

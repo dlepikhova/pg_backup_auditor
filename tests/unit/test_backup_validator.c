@@ -480,7 +480,7 @@ make_chain_bi(const char *id, BackupType type, BackupStatus status,
 	BackupInfo bi;
 	memset(&bi, 0, sizeof(bi));
 	strncpy(bi.backup_id, id, sizeof(bi.backup_id) - 1);
-	/* Empty backup_path: validate_backup_structure() returns NULL (not
+	/* Empty backup_path: pg_probackup_validate_structure() returns NULL (not
 	 * applicable for missing path), so connectivity tests are not polluted
 	 * by missing on-disk files. */
 	bi.backup_path[0] = '\0';
@@ -860,7 +860,7 @@ START_TEST(test_meta_invalid_lsn)
 END_TEST
 
 /* ================================================================== *
- * validate_backup_structure() tests
+ * pg_probackup_validate_structure() tests
  * ================================================================== */
 
 /*
@@ -922,7 +922,7 @@ make_struct_backup(bool stream)
 /* NULL input → NULL returned */
 START_TEST(test_struct_null_input)
 {
-	ValidationResult *res = validate_backup_structure(NULL);
+	ValidationResult *res = pg_probackup_validate_structure(NULL);
 	ck_assert_ptr_null(res);
 }
 END_TEST
@@ -935,7 +935,7 @@ START_TEST(test_struct_non_probackup)
 	bi.tool = BACKUP_TOOL_PG_BASEBACKUP;
 	strncpy(bi.backup_path, "/tmp", sizeof(bi.backup_path) - 1);
 
-	ValidationResult *res = validate_backup_structure(&bi);
+	ValidationResult *res = pg_probackup_validate_structure(&bi);
 	ck_assert_ptr_null(res);
 }
 END_TEST
@@ -947,7 +947,7 @@ START_TEST(test_struct_archive_ok)
 	make_probackup_structure(backup_dir, false);
 
 	BackupInfo       bi  = make_struct_backup(false);
-	ValidationResult *res = validate_backup_structure(&bi);
+	ValidationResult *res = pg_probackup_validate_structure(&bi);
 
 	ck_assert_ptr_nonnull(res);
 	ck_assert_int_eq(res->error_count,   0);
@@ -966,7 +966,7 @@ START_TEST(test_struct_stream_ok)
 	make_probackup_structure(backup_dir, true);
 
 	BackupInfo       bi  = make_struct_backup(true);
-	ValidationResult *res = validate_backup_structure(&bi);
+	ValidationResult *res = pg_probackup_validate_structure(&bi);
 
 	ck_assert_ptr_nonnull(res);
 	ck_assert_int_eq(res->error_count,   0);
@@ -989,7 +989,7 @@ START_TEST(test_struct_missing_database_dir)
 	write_file(path, "{}\n", 3);
 
 	BackupInfo       bi  = make_struct_backup(false);
-	ValidationResult *res = validate_backup_structure(&bi);
+	ValidationResult *res = pg_probackup_validate_structure(&bi);
 
 	ck_assert_ptr_nonnull(res);
 	ck_assert_int_ge(res->error_count, 1);
@@ -1011,7 +1011,7 @@ START_TEST(test_struct_missing_database_map)
 	remove(path);
 
 	BackupInfo       bi  = make_struct_backup(false);
-	ValidationResult *res = validate_backup_structure(&bi);
+	ValidationResult *res = pg_probackup_validate_structure(&bi);
 
 	ck_assert_ptr_nonnull(res);
 	ck_assert_int_ge(res->error_count, 1);
@@ -1036,7 +1036,7 @@ START_TEST(test_struct_missing_pg_control)
 	remove(path);
 
 	BackupInfo       bi  = make_struct_backup(false);
-	ValidationResult *res = validate_backup_structure(&bi);
+	ValidationResult *res = pg_probackup_validate_structure(&bi);
 
 	ck_assert_ptr_nonnull(res);
 	ck_assert_int_ge(res->error_count, 1);
@@ -1061,7 +1061,7 @@ START_TEST(test_struct_archive_missing_backup_label)
 	remove(path);
 
 	BackupInfo       bi  = make_struct_backup(false);
-	ValidationResult *res = validate_backup_structure(&bi);
+	ValidationResult *res = pg_probackup_validate_structure(&bi);
 
 	ck_assert_ptr_nonnull(res);
 	ck_assert_int_ge(res->error_count, 1);
@@ -1086,7 +1086,7 @@ START_TEST(test_struct_stream_missing_pg_wal)
 	rmdir(path);
 
 	BackupInfo       bi  = make_struct_backup(true);
-	ValidationResult *res = validate_backup_structure(&bi);
+	ValidationResult *res = pg_probackup_validate_structure(&bi);
 
 	ck_assert_ptr_nonnull(res);
 	ck_assert_int_eq(res->error_count, 0);
@@ -1112,7 +1112,7 @@ START_TEST(test_struct_missing_content_control)
 	remove(path);
 
 	BackupInfo       bi  = make_struct_backup(false);
-	ValidationResult *res = validate_backup_structure(&bi);
+	ValidationResult *res = pg_probackup_validate_structure(&bi);
 
 	ck_assert_ptr_nonnull(res);
 	ck_assert_int_eq(res->error_count, 0);
@@ -1181,7 +1181,7 @@ backup_validator_suite(void)
 	tcase_add_test(tc_meta, test_meta_invalid_lsn);
 	suite_add_tcase(s, tc_meta);
 
-	TCase *tc_struct = tcase_create("validate_backup_structure");
+	TCase *tc_struct = tcase_create("pg_probackup_validate_structure");
 	tcase_add_test(tc_struct, test_struct_null_input);
 	tcase_add_test(tc_struct, test_struct_non_probackup);
 	tcase_add_test(tc_struct, test_struct_archive_ok);

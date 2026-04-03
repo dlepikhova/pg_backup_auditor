@@ -412,12 +412,6 @@ static char* pgbackrest_get_wal_archive_path_stub(const char *backup_path, const
 	return NULL;
 }
 
-static ValidationResult* pgbackrest_validate_stub(BackupInfo *info, WALArchiveInfo *wal)
-{
-	(void) info;
-	(void) wal;
-	return NULL;  /* Not implemented */
-}
 
 static void pgbackrest_cleanup_stub(BackupInfo *info)
 {
@@ -431,7 +425,8 @@ BackupAdapter pgbackrest_adapter = {
 	.scan = pgbackrest_scan,
 	.read_metadata = pgbackrest_read_metadata_stub,
 	.get_wal_archive_path = pgbackrest_get_wal_archive_path_stub,
-	.validate = pgbackrest_validate_stub,
+	.validate_structure = NULL,
+	.get_embedded_wal   = NULL,
 	.cleanup = pgbackrest_cleanup_stub
 };
 

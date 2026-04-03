@@ -34,13 +34,16 @@ static bool pg_basebackup_detect(const char *path);
 static BackupInfo* pg_basebackup_scan(const char *backup_root);
 static int pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info);
 static char* pg_basebackup_get_wal_archive_path(const char *backup_path, const char *instance_name);
-static ValidationResult* pg_basebackup_validate(BackupInfo *info, WALArchiveInfo *wal);
 static void pg_basebackup_cleanup(BackupInfo *info);
 
 /* Helper functions */
 static bool is_tar_format(const char *path);
 static bool is_plain_format(const char *path);
 static int parse_backup_manifest(const char *manifest_path, BackupInfo *info);
+
+/* Implemented in src/validator/pg_basebackup_validator.c */
+ValidationResult* pg_basebackup_validate_structure(BackupInfo *backup);
+WALArchiveInfo*   pg_basebackup_get_embedded_wal(BackupInfo *backup);
 
 /* Adapter definition */
 BackupAdapter pg_basebackup_adapter = {
@@ -49,7 +52,8 @@ BackupAdapter pg_basebackup_adapter = {
 	.scan = pg_basebackup_scan,
 	.read_metadata = pg_basebackup_read_metadata,
 	.get_wal_archive_path = pg_basebackup_get_wal_archive_path,
-	.validate = pg_basebackup_validate,
+	.validate_structure = pg_basebackup_validate_structure,
+	.get_embedded_wal   = pg_basebackup_get_embedded_wal,
 	.cleanup = pg_basebackup_cleanup
 };
 
@@ -652,27 +656,6 @@ pg_basebackup_get_wal_archive_path(const char *backup_path, const char *instance
 	 * This would require reading PostgreSQL configuration or user-provided path */
 	log_debug("No pg_wal directory found in pg_basebackup backup: %s", backup_path);
 	log_debug("External WAL archive support not yet implemented");
-	return NULL;
-}
-
-/*
- * Validate pg_basebackup backup
- */
-static ValidationResult*
-pg_basebackup_validate(BackupInfo *info, WALArchiveInfo *wal)
-{
-	/* TODO: Implement validation
-	 *
-	 * Check:
-	 * - backup_label exists and is valid
-	 * - Required directories exist (base/, global/)
-	 * - PG_VERSION exists and is valid
-	 * - If WAL archive provided, check WAL availability
-	 */
-
-	(void) info;  /* unused for now */
-	(void) wal;  /* unused for now */
-
 	return NULL;
 }
 

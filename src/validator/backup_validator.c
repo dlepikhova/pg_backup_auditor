@@ -22,6 +22,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "pg_backup_auditor.h"
+#include "adapter.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -174,128 +175,6 @@ validate_backup_metadata(BackupInfo *info)
 }
 
 /* ------------------------------------------------------------------ *
- * validate_backup_structure
- *
- * Verifies the on-disk layout of a pg_probackup backup.
- * Does NOT read file contents — only checks presence of required paths.
- *
- * ERROR conditions (backup cannot be restored without these):
- *   database/                 — data directory
- *   database/database_map     — OID→dbname map (always written)
- *   database/global/pg_control
- *   database/backup_label     — ARCHIVE mode only (stream=false)
- *
- * WARNING conditions (degraded functionality):
- *   database/PG_VERSION       — missing
- *   backup_content.control    — checksum validation impossible
- *   database/pg_wal/          — missing for STREAM backups (stream=true)
- *
- * Returns NULL for non-pg_probackup tools or empty backup_path.
- * ------------------------------------------------------------------ */
-ValidationResult*
-validate_backup_structure(BackupInfo *backup)
-{
-	ValidationResult *result;
-	char              path[PATH_MAX];
-
-	if (backup == NULL)
-		return NULL;
-
-	if (backup->tool != BACKUP_TOOL_PG_PROBACKUP)
-		return NULL;
-
-	if (backup->backup_path[0] == '\0')
-		return NULL;
-
-	result = calloc(1, sizeof(ValidationResult));
-	if (result == NULL)
-		return NULL;
-	result->status = BACKUP_STATUS_OK;
-
-	/* database/ */
-	path_join(path, sizeof(path), backup->backup_path, "database");
-	if (!is_directory(path))
-	{
-		add_error(result, "Missing database/ directory");
-	}
-	else
-	{
-		/* database/database_map */
-		path_join(path, sizeof(path), backup->backup_path, "database");
-		path_join(path, sizeof(path), path, "database_map");
-		if (!file_exists(path))
-			add_error(result, "Missing database/database_map");
-
-		/* database/global/pg_control */
-		{
-			char ctrl[PATH_MAX];
-			path_join(ctrl, sizeof(ctrl), backup->backup_path, "database");
-			path_join(ctrl, sizeof(ctrl), ctrl, "global");
-			path_join(ctrl, sizeof(ctrl), ctrl, "pg_control");
-			if (!file_exists(ctrl))
-				add_error(result, "Missing database/global/pg_control");
-		}
-
-		/* database/backup_label (ARCHIVE mode only) */
-		if (!backup->wal_stream)
-		{
-			path_join(path, sizeof(path), backup->backup_path, "database");
-			path_join(path, sizeof(path), path, "backup_label");
-			if (!file_exists(path))
-				add_error(result,
-						  "Missing database/backup_label "
-						  "(required for archive-mode backup)");
-		}
-
-		/* database/PG_VERSION — only present in FULL backups;
-		 * pg_probackup skips unchanged files in DELTA/PAGE/PTRACK */
-		if (backup->type == BACKUP_TYPE_FULL)
-		{
-			path_join(path, sizeof(path), backup->backup_path, "database");
-			path_join(path, sizeof(path), path, "PG_VERSION");
-			if (!file_exists(path))
-				add_warning(result, "Missing database/PG_VERSION");
-		}
-
-		/* database/pg_wal/ (STREAM mode) */
-		if (backup->wal_stream)
-		{
-			char wal_dir[PATH_MAX];
-			path_join(wal_dir, sizeof(wal_dir), backup->backup_path, "database");
-			path_join(wal_dir, sizeof(wal_dir), wal_dir, "pg_wal");
-			if (!is_directory(wal_dir))
-				add_warning(result,
-							"Missing database/pg_wal/ "
-							"(expected for stream backup)");
-		}
-
-		/*
-		 * tablespace_map is absent when no non-default tablespaces exist,
-		 * so its absence is not an error.
-		 *
-		 * TODO: parse tablespace_map entries and verify that the referenced
-		 * pg_tblspc/<OID> subdirectories exist inside the backup.
-		 * TODO: parse database_map JSON and verify base/<OID>/ directories.
-		 */
-	}
-
-	/* backup_content.control */
-	path_join(path, sizeof(path),
-			  backup->backup_path, "backup_content.control");
-	if (!file_exists(path))
-		add_warning(result,
-					"Missing backup_content.control "
-					"(checksum validation not possible)");
-
-	if (result->error_count > 0)
-		result->status = BACKUP_STATUS_ERROR;
-	else if (result->warning_count > 0)
-		result->status = BACKUP_STATUS_WARNING;
-
-	return result;
-}
-
-/* ------------------------------------------------------------------ *
  * validate_single_backup
  *
  * Runs all applicable validation checks for a single backup according
@@ -333,7 +212,12 @@ validate_single_backup(BackupInfo *backup, WALArchiveInfo *wal_info,
 	/* Level 1: structure */
 	if (level >= VALIDATION_LEVEL_BASIC)
 	{
-		ValidationResult *sr = validate_backup_structure(backup);
+		BackupAdapter    *adapter = get_adapter_for_tool(backup->tool);
+		ValidationResult *sr     = NULL;
+
+		if (adapter != NULL && adapter->validate_structure != NULL)
+			sr = adapter->validate_structure(backup);
+
 		if (sr != NULL)
 		{
 			merge_result(result, sr, NULL);
@@ -371,29 +255,17 @@ validate_single_backup(BackupInfo *backup, WALArchiveInfo *wal_info,
 				/* Archive mode: use external wal_info */
 				effective_wal = wal_info;
 			}
-			else if (backup->tool == BACKUP_TOOL_PG_PROBACKUP &&
-					 backup->backup_path[0] != '\0')
+			else
 			{
-				/* Stream mode: WAL is embedded in database/pg_wal/.
-				 * Always prefer embedded WAL — the external archive may
-				 * be missing segments that the stream backup carries
-				 * internally, and the backup is self-sufficient. */
-				char pg_wal_path[PATH_MAX];
-				path_join(pg_wal_path, sizeof(pg_wal_path),
-						  backup->backup_path, "database");
-				path_join(pg_wal_path, sizeof(pg_wal_path),
-						  pg_wal_path, "pg_wal");
-				if (is_directory(pg_wal_path))
-				{
-					stream_wal    = scan_wal_archive(pg_wal_path);
-					effective_wal = stream_wal;
-				}
-				else
-					effective_wal = wal_info;  /* fallback if pg_wal/ absent */
-			}
-			else if (wal_info != NULL)
-			{
-				effective_wal = wal_info;
+				/* Stream mode: ask the adapter for embedded WAL.
+				 * Always prefer embedded WAL — the backup is self-sufficient
+				 * and the external archive may be missing segments that the
+				 * stream backup carries internally. */
+				BackupAdapter *adapter = get_adapter_for_tool(backup->tool);
+				if (adapter != NULL && adapter->get_embedded_wal != NULL)
+					stream_wal = adapter->get_embedded_wal(backup);
+
+				effective_wal = (stream_wal != NULL) ? stream_wal : wal_info;
 			}
 
 			if (effective_wal != NULL)

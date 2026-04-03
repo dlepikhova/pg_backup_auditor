@@ -31,8 +31,11 @@ static bool pg_probackup_detect(const char *path);
 static BackupInfo* pg_probackup_scan(const char *backup_root);
 static int pg_probackup_read_metadata(const char *backup_path, BackupInfo *info);
 static char* pg_probackup_get_wal_archive_path(const char *backup_path, const char *instance_name);
-static ValidationResult* pg_probackup_validate(BackupInfo *info, WALArchiveInfo *wal);
 static void pg_probackup_cleanup(BackupInfo *info);
+
+/* Implemented in src/validator/pg_probackup_validator.c */
+ValidationResult* pg_probackup_validate_structure(BackupInfo *backup);
+WALArchiveInfo*   pg_probackup_get_embedded_wal(BackupInfo *backup);
 
 /* Adapter definition */
 BackupAdapter pg_probackup_adapter = {
@@ -41,7 +44,8 @@ BackupAdapter pg_probackup_adapter = {
 	.scan = pg_probackup_scan,
 	.read_metadata = pg_probackup_read_metadata,
 	.get_wal_archive_path = pg_probackup_get_wal_archive_path,
-	.validate = pg_probackup_validate,
+	.validate_structure = pg_probackup_validate_structure,
+	.get_embedded_wal   = pg_probackup_get_embedded_wal,
 	.cleanup = pg_probackup_cleanup
 };
 
@@ -586,28 +590,6 @@ pg_probackup_get_wal_archive_path(const char *backup_path, const char *instance_
 	return NULL;
 }
 
-/*
- * Validate pg_probackup backup
- */
-static ValidationResult*
-pg_probackup_validate(BackupInfo *info, WALArchiveInfo *wal)
-{
-	/* TODO: Implement validation
-	 *
-	 * Check:
-	 * - backup.control exists and is valid
-	 * - Status is valid (OK, RUNNING, CORRUPT, ERROR, ORPHAN)
-	 * - For incremental backups, validate parent chain
-	 * - LSN consistency (start_lsn < stop_lsn)
-	 * - Timeline validity
-	 * - If WAL archive provided, check coverage
-	 */
-
-	(void) info;  /* unused for now */
-	(void) wal;  /* unused for now */
-
-	return NULL;
-}
 
 /*
  * Cleanup resources
