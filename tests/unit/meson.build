@@ -7,6 +7,7 @@ test_common_sources = files(
   '../../src/common/file_utils.c',
   '../../src/common/xlog.c',
   '../../src/common/ini_parser.c',
+  '../../src/common/sha256.c',
   '../../src/scanner/fs_scanner.c',
   '../../src/adapters/adapter_registry.c',
   '../../src/adapters/pg_basebackup.c',
@@ -14,6 +15,8 @@ test_common_sources = files(
   '../../src/adapters/pgbackrest.c',
   '../../src/validator/backup_validator.c',
   '../../src/validator/wal_validator.c',
+  '../../src/validator/pg_probackup_validator.c',
+  '../../src/validator/pg_basebackup_validator.c',
 )
 
 # Test sources
@@ -27,6 +30,9 @@ test_sources = files(
   'test_xlog.c',
   'test_ini_parser.c',
   'test_wal_validator.c',
+  'test_backup_validator.c',
+  'test_fs_scanner.c',
+  'test_pg_probackup.c',
 )
 
 # Test-specific compiler flags (disable Werror for libcheck compatibility)

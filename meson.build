@@ -59,6 +59,7 @@ sources = files(
   'src/common/file_utils.c',
   'src/common/arg_parser.c',
   'src/common/ini_parser.c',
+  'src/common/sha256.c',
   'src/scanner/fs_scanner.c',
   'src/adapters/pg_basebackup.c',
   'src/adapters/pg_probackup.c',
@@ -66,6 +67,8 @@ sources = files(
   'src/adapters/adapter_registry.c',
   'src/validator/backup_validator.c',
   'src/validator/wal_validator.c',
+  'src/validator/pg_probackup_validator.c',
+  'src/validator/pg_basebackup_validator.c',
 )
 
 # Compiler flags
