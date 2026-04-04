@@ -159,6 +159,19 @@ parse_pgbackrest_manifest(BackupInfo *info, const char *manifest_path)
 	if (value != NULL)
 		parse_lsn(value, &info->stop_lsn);
 
+	/*
+	 * Timeline: stored in the first 8 hex chars of backup-archive-start,
+	 * e.g. "000000010000000000000006" → timeline 1.
+	 */
+	value = ini_get_value(ini, "backup", "backup-archive-start");
+	if (value != NULL && strlen(value) >= 8)
+	{
+		char tl_str[9];
+		memcpy(tl_str, value, 8);
+		tl_str[8] = '\0';
+		info->timeline = (TimeLineID)strtoul(tl_str, NULL, 16);
+	}
+
 	/* Parse [backup:db] section for version info */
 	value = ini_get_value(ini, "backup:db", "db-version");
 	if (value != NULL)
@@ -168,13 +181,15 @@ parse_pgbackrest_manifest(BackupInfo *info, const char *manifest_path)
 		info->pg_version = major * 10000;
 	}
 
-	/* Parse backup size information */
+	/* backup-size: not always present in pgBackRest manifests.
+	 * Only overwrite if the field exists and is non-zero. */
 	value = ini_get_value(ini, "backup", "backup-size");
 	if (value != NULL)
-		info->data_bytes = (uint64_t)atoll(value);
-
-	/* Note: backup-repo-size is the compressed size in repository,
-	 * we use data_bytes for the uncompressed data size */
+	{
+		uint64_t sz = (uint64_t)atoll(value);
+		if (sz > 0)
+			info->data_bytes = sz;
+	}
 
 	ini_free(ini);
 	return true;
@@ -260,14 +275,6 @@ parse_pgbackrest_backup_info(const char *backup_info_path, const char *stanza_na
 		if (lsn_stop != NULL)
 			parse_lsn(lsn_stop, &info->stop_lsn);
 
-		/* Extract size information */
-		const char *backup_size = get_json_value(json_value, "backup-size");
-		if (backup_size != NULL)
-			info->data_bytes = (uint64_t)atoll(backup_size);
-
-		/* Note: backup-repo-size is the compressed size in repository,
-		 * we use data_bytes for the uncompressed data size */
-
 		/* Build backup path */
 		backup_dir = strrchr(backup_info_path, '/');
 		if (backup_dir != NULL)
@@ -276,6 +283,10 @@ parse_pgbackrest_backup_info(const char *backup_info_path, const char *stanza_na
 			snprintf(info->backup_path, sizeof(info->backup_path),
 					 "%.*s/%s", (int)dir_len, backup_info_path, info->backup_id);
 		}
+
+		/* Calculate backup size from directory */
+		if (info->backup_path[0] != '\0')
+			info->data_bytes = get_directory_size(info->backup_path);
 
 		/* Try to parse manifest for additional details */
 		path_join(manifest_path, sizeof(manifest_path),
@@ -402,13 +413,116 @@ static int pgbackrest_read_metadata_stub(const char *backup_path, BackupInfo *in
 	return -1;  /* Not implemented */
 }
 
-static char* pgbackrest_get_wal_archive_path_stub(const char *backup_path, const char *instance_name)
+/*
+ * pgbackrest_get_wal_archive_path
+ *
+ * WAL is stored at: <repo>/archive/<stanza>/<pg-version>/
+ *
+ * backup_path is: <repo>/backup/<stanza>/<label>/
+ * Walk up 3 levels to reach <repo>, then descend into archive/<stanza>/.
+ * Inside that directory, find the first subdirectory (the pg-version dir)
+ * and return it.  If instance_name (stanza) is provided, use it directly.
+ */
+static char*
+pgbackrest_get_wal_archive_path(const char *backup_path, const char *instance_name)
 {
-	(void) backup_path;
-	(void) instance_name;
-	log_debug("pgBackRest WAL archive path detection not yet implemented");
-	/* TODO: Implement WAL path detection for pgBackRest
-	 * WAL is stored in: <repo>/archive/<stanza>/<pg-version>/ */
+	char        repo_path[PATH_MAX];
+	char        archive_base[PATH_MAX];
+	char        stanza_path[PATH_MAX];
+	char        wal_path[PATH_MAX];
+	const char *slash;
+	size_t      len;
+	DIR        *dir;
+	struct dirent *entry;
+	struct stat st;
+
+	if (backup_path == NULL)
+		return NULL;
+
+	/*
+	 * Derive <repo> from backup_path:
+	 * backup_path = <repo>/backup/<stanza>/<label>
+	 * Strip last 3 path components.
+	 */
+	strncpy(repo_path, backup_path, sizeof(repo_path) - 1);
+	repo_path[sizeof(repo_path) - 1] = '\0';
+
+	for (int i = 0; i < 3; i++)
+	{
+		slash = strrchr(repo_path, '/');
+		if (slash == NULL || slash == repo_path)
+			return NULL;
+		len = (size_t)(slash - repo_path);
+		repo_path[len] = '\0';
+	}
+
+	/* <repo>/archive/ */
+	path_join(archive_base, sizeof(archive_base), repo_path, "archive");
+	if (!is_directory(archive_base))
+	{
+		log_debug("pgBackRest archive directory not found: %s", archive_base);
+		return NULL;
+	}
+
+	/* <repo>/archive/<stanza>/ */
+	if (instance_name != NULL && instance_name[0] != '\0')
+	{
+		path_join(stanza_path, sizeof(stanza_path), archive_base, instance_name);
+	}
+	else
+	{
+		/* No stanza name — pick the first directory in archive/ */
+		dir = opendir(archive_base);
+		if (dir == NULL)
+			return NULL;
+
+		stanza_path[0] = '\0';
+		while ((entry = readdir(dir)) != NULL)
+		{
+			if (entry->d_name[0] == '.')
+				continue;
+			path_join(stanza_path, sizeof(stanza_path), archive_base, entry->d_name);
+			if (stat(stanza_path, &st) == 0 && S_ISDIR(st.st_mode))
+				break;
+			stanza_path[0] = '\0';
+		}
+		closedir(dir);
+
+		if (stanza_path[0] == '\0')
+			return NULL;
+	}
+
+	if (!is_directory(stanza_path))
+		return NULL;
+
+	/* <repo>/archive/<stanza>/<pg-version>/ — pick the first versioned dir */
+	dir = opendir(stanza_path);
+	if (dir == NULL)
+		return NULL;
+
+	wal_path[0] = '\0';
+	while ((entry = readdir(dir)) != NULL)
+	{
+		if (entry->d_name[0] == '.')
+			continue;
+		path_join(wal_path, sizeof(wal_path), stanza_path, entry->d_name);
+		if (stat(wal_path, &st) == 0 && S_ISDIR(st.st_mode))
+			break;
+		wal_path[0] = '\0';
+	}
+	closedir(dir);
+
+	if (wal_path[0] == '\0')
+		return NULL;
+
+	/*
+	 * pgBackRest stores WAL in subdirectories with checksum-suffixed names
+	 * (e.g. 000000010000000000000006-<hash>.gz), which scan_wal_archive()
+	 * cannot parse.  Return NULL so callers skip WAL checks rather than
+	 * producing false-positive "missing segment" errors.
+	 */
+	log_debug("pgBackRest WAL archive found at %s (subdirectory format, skipping scan)",
+			  wal_path);
 	return NULL;
 }
 
@@ -419,13 +533,16 @@ static void pgbackrest_cleanup_stub(BackupInfo *info)
 	/* Nothing to clean up yet */
 }
 
+/* Implemented in src/validator/pgbackrest_validator.c */
+ValidationResult* pgbackrest_validate_structure(BackupInfo *backup);
+
 BackupAdapter pgbackrest_adapter = {
 	.name = "pgBackRest",
 	.detect = pgbackrest_detect,
 	.scan = pgbackrest_scan,
 	.read_metadata = pgbackrest_read_metadata_stub,
-	.get_wal_archive_path = pgbackrest_get_wal_archive_path_stub,
-	.validate_structure = NULL,
+	.get_wal_archive_path = pgbackrest_get_wal_archive_path,
+	.validate_structure = pgbackrest_validate_structure,
 	.get_embedded_wal   = NULL,
 	.cleanup = pgbackrest_cleanup_stub
 };

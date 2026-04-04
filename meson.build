@@ -69,6 +69,7 @@ sources = files(
   'src/validator/wal_validator.c',
   'src/validator/pg_probackup_validator.c',
   'src/validator/pg_basebackup_validator.c',
+  'src/validator/pgbackrest_validator.c',
 )
 
 # Compiler flags

@@ -51,7 +51,8 @@ COMMON_SRCS = ../../src/common/string_utils.c \
               ../../src/validator/backup_validator.c \
               ../../src/validator/wal_validator.c \
               ../../src/validator/pg_probackup_validator.c \
-              ../../src/validator/pg_basebackup_validator.c
+              ../../src/validator/pg_basebackup_validator.c \
+              ../../src/validator/pgbackrest_validator.c
 
 # Test source files
 TEST_SRCS = test_runner.c \

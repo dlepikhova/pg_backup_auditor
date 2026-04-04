@@ -728,16 +728,11 @@ output_backups(const BackupInfo *backups, const ListOptions *opts)
  * Executes the complete list command workflow:
  * 1. Parse command-line arguments (--backup-dir, --type, --status, etc.)
  * 2. Scan backup directory via scan_backup_directory()
- * 3. TODO: Apply filters by tool type and status (currently not implemented)
- * 4. TODO: Sort results by selected field (currently not implemented)
- * 5. Output formatted backup list as a table
- * 6. Display summary statistics (backup count and total size)
+ * 3. Sort results by selected field (sort_backups)
+ * 4. Output filtered and limited backup list as a table (output_backups)
+ * 5. Display summary statistics (backup count and total size)
  *
- * CURRENT LIMITATIONS:
- * - Filtering by --type and --status: arguments are parsed but not applied
- * - Sorting by --sort-by: arguments are parsed but not applied
- * - Only --limit is functional
- * - Only table format is implemented (JSON/YAML fallback to table)
+ * Note: JSON/YAML output formats fall back to table format (not yet implemented).
  *
  * Returns:
  * - EXIT_SUCCESS (0) on successful execution

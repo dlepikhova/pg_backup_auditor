@@ -63,7 +63,8 @@ SRCS = src/main.c \
        src/validator/backup_validator.c \
        src/validator/wal_validator.c \
        src/validator/pg_probackup_validator.c \
-       src/validator/pg_basebackup_validator.c
+       src/validator/pg_basebackup_validator.c \
+       src/validator/pgbackrest_validator.c
 
 # Object files
 OBJS = $(SRCS:.c=.o)

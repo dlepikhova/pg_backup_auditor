@@ -364,6 +364,154 @@ START_TEST(test_backup_type_parsing)
 }
 END_TEST
 
+/* ------------------------------------------------------------------ *
+ * pgbackrest_validate_structure tests
+ * ------------------------------------------------------------------ */
+
+/* Helper: allocate a minimal BackupInfo pointing at a temp directory */
+static BackupInfo *
+make_pgbackrest_backup_info(const char *backup_path)
+{
+	BackupInfo *bi = calloc(1, sizeof(BackupInfo));
+	if (bi == NULL)
+		return NULL;
+	bi->tool = BACKUP_TOOL_PGBACKREST;
+	strncpy(bi->backup_path, backup_path, PATH_MAX - 1);
+	return bi;
+}
+
+/* Helper: create an empty file */
+static void
+touch_file(const char *path)
+{
+	FILE *fp = fopen(path, "w");
+	if (fp != NULL)
+		fclose(fp);
+}
+
+START_TEST(test_validate_struct_null_input)
+{
+	ValidationResult *r = pgbackrest_validate_structure(NULL);
+	ck_assert_ptr_null(r);
+}
+END_TEST
+
+START_TEST(test_validate_struct_ok)
+{
+	char dir[PATH_MAX], path[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vs_%d", getpid());
+	mkdir(dir, 0755);
+
+	/* Create backup.manifest */
+	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	touch_file(path);
+
+	/* Create pg_data/ */
+	snprintf(path, sizeof(path), "%s/pg_data", dir);
+	mkdir(path, 0755);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_validate_structure(bi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	/* No manifest.copy → 1 warning */
+	ck_assert_int_eq(r->warning_count, 1);
+	ck_assert_int_eq(r->status, BACKUP_STATUS_WARNING);
+
+	free_validation_result(r);
+	free(bi);
+
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	system(cmd);
+}
+END_TEST
+
+START_TEST(test_validate_struct_ok_with_copy)
+{
+	char dir[PATH_MAX], path[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vsc_%d", getpid());
+	mkdir(dir, 0755);
+
+	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	touch_file(path);
+
+	snprintf(path, sizeof(path), "%s/backup.manifest.copy", dir);
+	touch_file(path);
+
+	snprintf(path, sizeof(path), "%s/pg_data", dir);
+	mkdir(path, 0755);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_validate_structure(bi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	ck_assert_int_eq(r->warning_count, 0);
+	ck_assert_int_eq(r->status, BACKUP_STATUS_OK);
+
+	free_validation_result(r);
+	free(bi);
+
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	system(cmd);
+}
+END_TEST
+
+START_TEST(test_validate_struct_missing_manifest)
+{
+	char dir[PATH_MAX], path[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vsm_%d", getpid());
+	mkdir(dir, 0755);
+
+	/* pg_data/ present but no backup.manifest */
+	snprintf(path, sizeof(path), "%s/pg_data", dir);
+	mkdir(path, 0755);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_validate_structure(bi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert_int_eq(r->status, BACKUP_STATUS_ERROR);
+
+	free_validation_result(r);
+	free(bi);
+
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	system(cmd);
+}
+END_TEST
+
+START_TEST(test_validate_struct_missing_pg_data)
+{
+	char dir[PATH_MAX], path[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vsd_%d", getpid());
+	mkdir(dir, 0755);
+
+	/* backup.manifest present but no pg_data */
+	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	touch_file(path);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_validate_structure(bi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert_int_eq(r->status, BACKUP_STATUS_ERROR);
+
+	free_validation_result(r);
+	free(bi);
+
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	system(cmd);
+}
+END_TEST
+
 /* Create test suite for pgBackRest adapter */
 Suite *
 pgbackrest_suite(void)
@@ -372,6 +520,7 @@ pgbackrest_suite(void)
 	TCase *tc_detect;
 	TCase *tc_scan;
 	TCase *tc_metadata;
+	TCase *tc_validate;
 
 	s = suite_create("pgBackRest Adapter");
 
@@ -398,6 +547,15 @@ pgbackrest_suite(void)
 	tcase_add_test(tc_metadata, test_parse_pg_version);
 	tcase_add_test(tc_metadata, test_backup_type_parsing);
 	suite_add_tcase(s, tc_metadata);
+
+	/* Test case for structure validation */
+	tc_validate = tcase_create("validate_structure");
+	tcase_add_test(tc_validate, test_validate_struct_null_input);
+	tcase_add_test(tc_validate, test_validate_struct_ok);
+	tcase_add_test(tc_validate, test_validate_struct_ok_with_copy);
+	tcase_add_test(tc_validate, test_validate_struct_missing_manifest);
+	tcase_add_test(tc_validate, test_validate_struct_missing_pg_data);
+	suite_add_tcase(s, tc_validate);
 
 	return s;
 }
