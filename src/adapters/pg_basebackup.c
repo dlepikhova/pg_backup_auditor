@@ -270,11 +270,11 @@ pg_basebackup_scan(const char *backup_path)
 		}
 	}
 
-	/* Set end_time from directory modification time (best approximation) */
-	struct stat st;
-	if (stat(backup_path, &st) == 0)
+	/* end_time fallback: directory mtime (overridden by manifest mtime below) */
 	{
-		info->end_time = st.st_mtime;
+		struct stat st;
+		if (stat(backup_path, &st) == 0)
+			info->end_time = st.st_mtime;
 	}
 
 	/* Try to read PG_VERSION file from plain format */
@@ -604,6 +604,20 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 		log_debug("Detected incremental backup (PostgreSQL 17+)");
 	}
 
+	/*
+	 * Supplemental read from backup_manifest (plain format only):
+	 * - End-LSN from WAL-Ranges overrides CHECKPOINT LOCATION (more accurate)
+	 * - end_time from manifest file mtime (manifest is written last)
+	 */
+	if (!is_tar)
+	{
+		char manifest_path[PATH_MAX];
+		path_join(manifest_path, sizeof(manifest_path),
+				  backup_path, "backup_manifest");
+		if (file_exists(manifest_path))
+			parse_backup_manifest(manifest_path, info);
+	}
+
 	/* Try to extract node name from directory name
 	 * Example: "backup_shard1_20240108" -> "shard1"
 	 * Pattern: look for common separators and extract meaningful parts
@@ -660,17 +674,62 @@ pg_basebackup_get_wal_archive_path(const char *backup_path, const char *instance
 }
 
 /*
- * Parse backup_manifest file (minimal JSON parsing)
- * Used for pg_combinebackup backups without backup_label
+ * parse_lsn_str — parse "X/XXXXXX" into uint64_t.
+ * Returns true on success.
+ */
+static bool
+parse_lsn_str(const char *str, uint64_t *out)
+{
+	unsigned int hi, lo;
+	if (sscanf(str, "%X/%X", &hi, &lo) == 2)
+	{
+		*out = ((uint64_t)hi << 32) | lo;
+		return true;
+	}
+	return false;
+}
+
+/*
+ * parse_quoted_lsn — find the first quoted string following `key` on `line`
+ * and parse it as an LSN.  Returns true on success.
+ */
+static bool
+parse_quoted_lsn(const char *line, const char *key, uint64_t *out)
+{
+	const char *p = strstr(line, key);
+	if (p == NULL)
+		return false;
+	p += strlen(key);
+	p = strchr(p, '"');
+	if (p == NULL) return false;
+	p++;
+	return parse_lsn_str(p, out);
+}
+
+/*
+ * parse_backup_manifest — read backup_manifest for metadata.
+ *
+ * Primary use: pg_combinebackup (no backup_label) — extracts Timeline,
+ * Start-LSN, and generates a synthetic backup_id/start_time.
+ *
+ * Supplemental use (called after backup_label is parsed): overrides
+ * stop_lsn with the more accurate End-LSN from WAL-Ranges, and sets
+ * end_time from the manifest file's mtime (written last by pg_basebackup).
+ *
+ * The `supplemental` flag controls which fields are updated:
+ *   false — full parse, fills start_lsn / timeline / backup_id / start_time
+ *   true  — only updates stop_lsn and end_time (leaves other fields alone)
  */
 static int
 parse_backup_manifest(const char *manifest_path, BackupInfo *info)
 {
-	FILE *fp;
-	char line[2048];
-	bool found_timeline = false;
-	bool found_lsn = false;
-	time_t now;
+	FILE       *fp;
+	char        line[2048];
+	bool        found_timeline = false;
+	bool        found_start_lsn = false;
+	bool        found_end_lsn = false;
+	time_t      now;
+	struct stat mst;
 
 	fp = fopen(manifest_path, "r");
 	if (fp == NULL)
@@ -679,79 +738,83 @@ parse_backup_manifest(const char *manifest_path, BackupInfo *info)
 		return STATUS_ERROR;
 	}
 
-	/* Simple text-based JSON parsing for specific fields */
 	while (fgets(line, sizeof(line), fp) != NULL)
 	{
-		char *ptr;
-
-		/* Look for "Timeline": <number> */
-		if (!found_timeline && (ptr = strstr(line, "\"Timeline\"")) != NULL)
+		/* "Timeline": <number> */
+		if (!found_timeline && strstr(line, "\"Timeline\"") != NULL)
 		{
-			ptr = strchr(ptr, ':');
-			if (ptr != NULL)
+			const char *p = strstr(line, "\"Timeline\"");
+			p = strchr(p, ':');
+			if (p != NULL)
 			{
-				info->timeline = (TimeLineID)atoi(ptr + 1);
+				info->timeline = (TimeLineID)atoi(p + 1);
 				found_timeline = true;
 			}
 		}
 
-		/* Look for "Start-LSN": "X/XXXXXX" */
-		if (!found_lsn && (ptr = strstr(line, "\"Start-LSN\"")) != NULL)
+		/* "Start-LSN": "X/X" — only if not yet set */
+		if (!found_start_lsn && strstr(line, "\"Start-LSN\"") != NULL)
 		{
-			ptr = strchr(ptr, '"');
-			if (ptr != NULL)
+			uint64_t lsn = 0;
+			if (parse_quoted_lsn(line, "\"Start-LSN\"", &lsn))
 			{
-				ptr++; /* skip opening quote */
-				ptr = strchr(ptr, '"');
-				if (ptr != NULL)
-				{
-					ptr++; /* skip second quote */
-					ptr = strchr(ptr, '"');
-					if (ptr != NULL)
-					{
-						ptr++; /* now at the LSN value */
-						unsigned int hi, lo;
-						if (sscanf(ptr, "%X/%X", &hi, &lo) == 2)
-						{
-							info->start_lsn = ((uint64_t)hi << 32) | lo;
-							found_lsn = true;
-						}
-					}
-				}
+				if (info->start_lsn == 0)
+					info->start_lsn = lsn;
+				found_start_lsn = true;
 			}
 		}
 
-		if (found_timeline && found_lsn)
+		/* "End-LSN": "X/X" — always update stop_lsn (more accurate) */
+		if (!found_end_lsn && strstr(line, "\"End-LSN\"") != NULL)
+		{
+			uint64_t lsn = 0;
+			if (parse_quoted_lsn(line, "\"End-LSN\"", &lsn))
+			{
+				info->stop_lsn = lsn;
+				found_end_lsn = true;
+			}
+		}
+
+		/* Stop once we've passed WAL-Ranges */
+		if (found_timeline && found_start_lsn && found_end_lsn)
 			break;
 	}
 
 	fclose(fp);
 
-	if (!found_timeline && !found_lsn)
+	/*
+	 * end_time: backup_manifest is the last file written by pg_basebackup,
+	 * so its mtime is the best available approximation of backup end time.
+	 */
+	if (stat(manifest_path, &mst) == 0)
+		info->end_time = mst.st_mtime;
+
+	if (!found_timeline && !found_start_lsn)
 	{
 		log_warning("backup_manifest does not contain Timeline or Start-LSN");
 		return STATUS_ERROR;
 	}
 
-	/* For pg_combinebackup, use current time as fallback for backup_id */
-	now = time(NULL);
-	struct tm *tm_now = localtime(&now);
-	snprintf(info->backup_id, sizeof(info->backup_id),
-			 "%04d%02d%02d-%02d%02d%02d",
-			 tm_now->tm_year + 1900,
-			 tm_now->tm_mon + 1,
-			 tm_now->tm_mday,
-			 tm_now->tm_hour,
-			 tm_now->tm_min,
-			 tm_now->tm_sec);
+	/* For pg_combinebackup (no backup_label): generate synthetic backup_id */
+	if (info->start_time == 0)
+	{
+		now = time(NULL);
+		struct tm *tm_now = localtime(&now);
+		snprintf(info->backup_id, sizeof(info->backup_id),
+				 "%04d%02d%02d-%02d%02d%02d",
+				 tm_now->tm_year + 1900,
+				 tm_now->tm_mon + 1,
+				 tm_now->tm_mday,
+				 tm_now->tm_hour,
+				 tm_now->tm_min,
+				 tm_now->tm_sec);
+		info->start_time = now;
+	}
 
-	/* Set start_time to now as well */
-	info->start_time = now;
-
-	log_debug("Parsed backup_manifest: timeline=%u, start_lsn=%lX/%X",
+	log_debug("Parsed backup_manifest: timeline=%u, start_lsn=%llX, stop_lsn=%llX",
 			  info->timeline,
-			  (unsigned long)(info->start_lsn >> 32),
-			  (unsigned int)(info->start_lsn & 0xFFFFFFFF));
+			  (unsigned long long)info->start_lsn,
+			  (unsigned long long)info->stop_lsn);
 
 	return STATUS_OK;
 }
