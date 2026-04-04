@@ -30,6 +30,7 @@
 #include <check.h>
 #include "../../include/types.h"
 #include "../../include/common.h"
+#include "../../include/sha256.h"
 
 /* ------------------------------------------------------------------ *
  * Helpers
@@ -1402,6 +1403,191 @@ START_TEST(test_bb_wal_plain_stream_missing)
 }
 END_TEST
 
+/* ================================================================== *
+ * check_manifest_checksums() tests
+ * ================================================================== */
+
+/*
+ * Format a uint32_t CRC32C value as little-endian hex — the same encoding
+ * that PostgreSQL writes into backup_manifest ("Checksum": "93ec8efb").
+ */
+static void
+crc32c_to_manifest_hex(uint32_t crc, char out[9])
+{
+	snprintf(out, 9, "%02x%02x%02x%02x",
+			 (unsigned)(crc & 0xFF),
+			 (unsigned)((crc >> 8) & 0xFF),
+			 (unsigned)((crc >> 16) & 0xFF),
+			 (unsigned)((crc >> 24) & 0xFF));
+}
+
+/*
+ * Write a minimal backup_manifest for one file.
+ *
+ * corrupt_file_cksum   — write a wrong CRC32C for the file entry
+ * corrupt_self_cksum   — write a wrong Manifest-Checksum
+ */
+static void
+write_test_manifest(const char *bdir, const char *rel_path,
+					uint32_t file_crc,
+					bool corrupt_file_cksum,
+					bool corrupt_self_cksum)
+{
+	char      manifest_path[PATH_MAX];
+	char      body[2048];
+	int       body_len;
+	SHA256Ctx ctx;
+	uint8_t   digest[SHA256_DIGEST_LENGTH];
+	char      self_hex[SHA256_HEX_LENGTH + 1];
+	char      crc_hex[9];
+	FILE     *fp;
+
+	crc32c_to_manifest_hex(file_crc, crc_hex);
+	if (corrupt_file_cksum)
+		crc_hex[0] = (crc_hex[0] == 'f') ? '0' : 'f';
+
+	body_len = snprintf(body, sizeof(body),
+		"{ \"PostgreSQL-Backup-Manifest-Version\": 2,\n"
+		"\"Files\": [\n"
+		"{ \"Path\": \"%s\", \"Size\": 5, "
+		"\"Checksum-Algorithm\": \"CRC32C\", \"Checksum\": \"%s\" }\n"
+		"],\n"
+		"\"WAL-Ranges\": [],\n",
+		rel_path, crc_hex);
+
+	sha256_init(&ctx);
+	sha256_update(&ctx, body, (size_t)body_len);
+	sha256_final(&ctx, digest);
+	sha256_to_hex(digest, self_hex);
+
+	if (corrupt_self_cksum)
+		self_hex[0] = (self_hex[0] == 'a') ? 'b' : 'a';
+
+	snprintf(manifest_path, sizeof(manifest_path),
+			 "%s/backup_manifest", bdir);
+	fp = fopen(manifest_path, "w");
+	if (fp)
+	{
+		fputs(body, fp);
+		fprintf(fp, "\"Manifest-Checksum\": \"%s\"}\n", self_hex);
+		fclose(fp);
+	}
+}
+
+/* NULL input → NULL */
+START_TEST(test_manifest_null_input)
+{
+	ValidationResult *res = check_manifest_checksums(NULL);
+	ck_assert_ptr_null(res);
+}
+END_TEST
+
+/* No backup_manifest file → NULL (not applicable) */
+START_TEST(test_manifest_no_manifest)
+{
+	setup_test_dirs();
+
+	BackupInfo        bi  = make_bb_backup(false);
+	ValidationResult *res = check_manifest_checksums(&bi);
+
+	ck_assert_ptr_null(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Correct CRC32C and correct self-checksum → 0 errors, 0 warnings */
+START_TEST(test_manifest_crc32c_ok)
+{
+	const char data[] = "hello";
+	uint32_t   crc    = 0;
+	char       file_path[PATH_MAX];
+
+	setup_test_dirs();
+
+	snprintf(file_path, sizeof(file_path), "%s/testfile", backup_dir);
+	write_file(file_path, data, 5);
+	compute_file_crc32c(file_path, &crc);
+
+	write_test_manifest(backup_dir, "testfile", crc, false, false);
+
+	BackupInfo        bi  = make_bb_backup(false);
+	ValidationResult *res = check_manifest_checksums(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count,   0);
+	ck_assert_int_eq(res->warning_count, 0);
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Corrupted file → CRC32C mismatch → 1 error */
+START_TEST(test_manifest_crc32c_mismatch)
+{
+	const char data[]      = "hello";
+	const char corrupted[] = "HELLO";
+	uint32_t   crc         = 0;
+	char       file_path[PATH_MAX];
+
+	setup_test_dirs();
+
+	snprintf(file_path, sizeof(file_path), "%s/testfile", backup_dir);
+	write_file(file_path, data, 5);
+	compute_file_crc32c(file_path, &crc);
+
+	/* Write manifest with correct original CRC, then corrupt the file */
+	write_test_manifest(backup_dir, "testfile", crc, false, false);
+	write_file(file_path, corrupted, 5);
+
+	BackupInfo        bi  = make_bb_backup(false);
+	ValidationResult *res = check_manifest_checksums(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->error_count; i++)
+		if (strstr(res->errors[i], "CRC32C mismatch") ||
+			strstr(res->errors[i], "mismatch")) found = true;
+	ck_assert_msg(found, "expected CRC32C mismatch error");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Corrupted Manifest-Checksum → 1 error about manifest integrity */
+START_TEST(test_manifest_self_checksum_bad)
+{
+	const char data[] = "hello";
+	uint32_t   crc    = 0;
+	char       file_path[PATH_MAX];
+
+	setup_test_dirs();
+
+	snprintf(file_path, sizeof(file_path), "%s/testfile", backup_dir);
+	write_file(file_path, data, 5);
+	compute_file_crc32c(file_path, &crc);
+
+	write_test_manifest(backup_dir, "testfile", crc, false, true /* corrupt self */);
+
+	BackupInfo        bi  = make_bb_backup(false);
+	ValidationResult *res = check_manifest_checksums(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_ge(res->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->error_count; i++)
+		if (strstr(res->errors[i], "self-checksum") ||
+			strstr(res->errors[i], "mismatch")) found = true;
+	ck_assert_msg(found, "expected manifest self-checksum error");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
 /* ------------------------------------------------------------------ *
  * Suite assembly
  * ------------------------------------------------------------------ */
@@ -1506,6 +1692,14 @@ backup_validator_suite(void)
 	/* Stream backup, plain format, pg_wal/ absent → NULL */
 	tcase_add_test(tc_bb_wal, test_bb_wal_plain_stream_missing);
 	suite_add_tcase(s, tc_bb_wal);
+
+	TCase *tc_manifest = tcase_create("check_manifest_checksums");
+	tcase_add_test(tc_manifest, test_manifest_null_input);
+	tcase_add_test(tc_manifest, test_manifest_no_manifest);
+	tcase_add_test(tc_manifest, test_manifest_crc32c_ok);
+	tcase_add_test(tc_manifest, test_manifest_crc32c_mismatch);
+	tcase_add_test(tc_manifest, test_manifest_self_checksum_bad);
+	suite_add_tcase(s, tc_manifest);
 
 	return s;
 }

@@ -100,6 +100,7 @@ WALArchiveInfo*   pg_probackup_get_embedded_wal(BackupInfo *backup);
 /* validator/pg_basebackup_validator.c */
 ValidationResult* pg_basebackup_validate_structure(BackupInfo *backup);
 WALArchiveInfo*   pg_basebackup_get_embedded_wal(BackupInfo *backup);
+ValidationResult* check_manifest_checksums(BackupInfo *backup);
 
 /* validator/wal_validator.c - WAL validation */
 ValidationResult* check_wal_continuity(WALArchiveInfo *wal_info);

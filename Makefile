@@ -54,6 +54,7 @@ SRCS = src/main.c \
        src/common/file_utils.c \
        src/common/arg_parser.c \
        src/common/ini_parser.c \
+       src/common/sha256.c \
        src/scanner/fs_scanner.c \
        src/adapters/pg_basebackup.c \
        src/adapters/pg_probackup.c \

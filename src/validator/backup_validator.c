@@ -239,12 +239,23 @@ validate_single_backup(BackupInfo *backup, WALArchiveInfo *wal_info,
 	/* Level 3+: checksums + WAL */
 	if (level >= VALIDATION_LEVEL_CHECKSUMS)
 	{
-		/* File-level checksums */
+		/* File-level checksums (pg_probackup: backup_content.control) */
 		ValidationResult *cr = check_backup_checksums(backup);
 		if (cr != NULL)
 		{
 			merge_result(result, cr, NULL);
 			free_validation_result(cr);
+		}
+
+		/* File-level checksums (pg_basebackup: backup_manifest SHA256) */
+		if (backup->tool == BACKUP_TOOL_PG_BASEBACKUP)
+		{
+			ValidationResult *mr = check_manifest_checksums(backup);
+			if (mr != NULL)
+			{
+				merge_result(result, mr, NULL);
+				free_validation_result(mr);
+			}
 		}
 
 		/* Determine WAL source */

@@ -27,9 +27,13 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "pg_backup_auditor.h"
+#include "sha256.h"
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <stdio.h>
+#include <inttypes.h>
+#include <strings.h>
 
 static void
 add_error(ValidationResult *result, const char *message)
@@ -237,4 +241,378 @@ pg_basebackup_get_embedded_wal(BackupInfo *backup)
 		return NULL;
 
 	return scan_wal_archive(path);
+}
+
+/* ------------------------------------------------------------------ *
+ * check_manifest_checksums
+ *
+ * Validates pg_basebackup's backup_manifest (PostgreSQL 13+).
+ *
+ * For each file entry with "Checksum-Algorithm": "SHA256":
+ *   - verifies the file exists at backup_path/<Path>
+ *   - computes SHA256 and compares against "Checksum" field
+ *
+ * Also verifies the manifest's own integrity checksum
+ * ("Manifest-Checksum" covers all manifest bytes before that key).
+ *
+ * Returns NULL when backup_manifest does not exist (not applicable).
+ * Tar-format backups: only the manifest self-checksum is verified
+ * (individual files inside the tar are not accessible without unpacking).
+ * ------------------------------------------------------------------ */
+
+/*
+ * Helper: extract a JSON string value following "Key": "VALUE"
+ * within a single line.  Writes at most outsz-1 chars into out.
+ * Returns true if found.
+ */
+static bool
+json_extract_string(const char *line, const char *key,
+					char *out, size_t outsz)
+{
+	const char *p;
+	const char *q;
+	size_t      len;
+
+	p = strstr(line, key);
+	if (p == NULL)
+		return false;
+
+	p += strlen(key);
+
+	/* skip whitespace and ':' */
+	while (*p == ' ' || *p == '\t' || *p == ':')
+		p++;
+
+	if (*p != '"')
+		return false;
+	p++;   /* skip opening quote */
+
+	q = strchr(p, '"');
+	if (q == NULL)
+		return false;
+
+	len = (size_t)(q - p);
+	if (len >= outsz)
+		len = outsz - 1;
+
+	memcpy(out, p, len);
+	out[len] = '\0';
+	return true;
+}
+
+/*
+ * Helper: extract a JSON integer value following "Key": NUMBER
+ * Returns true if found.
+ */
+static bool
+json_extract_uint64(const char *line, const char *key, uint64_t *out)
+{
+	const char *p;
+
+	p = strstr(line, key);
+	if (p == NULL)
+		return false;
+
+	p += strlen(key);
+	while (*p == ' ' || *p == '\t' || *p == ':')
+		p++;
+
+	if (*p < '0' || *p > '9')
+		return false;
+
+	*out = (uint64_t)strtoull(p, NULL, 10);
+	return true;
+}
+
+ValidationResult*
+check_manifest_checksums(BackupInfo *backup)
+{
+	ValidationResult *result;
+	char              manifest_path[PATH_MAX];
+	FILE             *fp;
+	char              line[4096];
+	bool              is_tar;
+	int               checked  = 0;
+	int               errors   = 0;
+
+	/* Per-entry state */
+	char     entry_path[PATH_MAX];
+	char     entry_algo[32];
+	char     entry_cksum[SHA256_HEX_LENGTH + 2];
+	uint64_t entry_size;
+	bool     have_path, have_algo, have_cksum, have_size;
+
+	/* Manifest self-checksum state */
+	SHA256Ctx manifest_ctx;
+	uint8_t   manifest_digest[SHA256_DIGEST_LENGTH];
+	char      manifest_hex[SHA256_HEX_LENGTH + 1];
+	char      stored_manifest_cksum[SHA256_HEX_LENGTH + 2];
+	bool      have_manifest_cksum = false;
+	long      manifest_cksum_offset = 0;   /* byte offset of "Manifest-Checksum" line */
+	char      msg[PATH_MAX + 128];
+
+	if (backup == NULL || backup->backup_path[0] == '\0')
+		return NULL;
+
+	path_join(manifest_path, sizeof(manifest_path),
+			  backup->backup_path, "backup_manifest");
+
+	if (!file_exists(manifest_path))
+		return NULL;   /* not applicable — no manifest */
+
+	result = calloc(1, sizeof(ValidationResult));
+	if (result == NULL)
+		return NULL;
+	result->status = BACKUP_STATUS_OK;
+
+	is_tar = has_tar_file(backup->backup_path, "base.tar");
+
+	/*
+	 * First pass: find the byte offset where "Manifest-Checksum" begins
+	 * so we can hash only the preceding bytes.
+	 */
+	fp = fopen(manifest_path, "r");
+	if (fp == NULL)
+	{
+		add_error(result, "Cannot open backup_manifest");
+		result->status = BACKUP_STATUS_ERROR;
+		return result;
+	}
+
+	manifest_cksum_offset = 0;
+	while (fgets(line, sizeof(line), fp) != NULL)
+	{
+		if (strstr(line, "\"Manifest-Checksum\"") != NULL)
+		{
+			/* Record where this line starts */
+			if (json_extract_string(line, "\"Manifest-Checksum\"",
+									stored_manifest_cksum,
+									sizeof(stored_manifest_cksum)))
+				have_manifest_cksum = true;
+			break;
+		}
+		manifest_cksum_offset = ftell(fp);
+	}
+	fclose(fp);
+
+	/*
+	 * Verify manifest self-checksum: hash the first manifest_cksum_offset
+	 * bytes of the file and compare against stored_manifest_cksum.
+	 */
+	if (have_manifest_cksum && manifest_cksum_offset > 0)
+	{
+		uint8_t  buf[8192];
+		size_t   remaining = (size_t)manifest_cksum_offset;
+		size_t   nread;
+
+		fp = fopen(manifest_path, "rb");
+		if (fp != NULL)
+		{
+			sha256_init(&manifest_ctx);
+			while (remaining > 0)
+			{
+				size_t want = remaining < sizeof(buf) ? remaining : sizeof(buf);
+				nread = fread(buf, 1, want, fp);
+				if (nread == 0) break;
+				sha256_update(&manifest_ctx, buf, nread);
+				remaining -= nread;
+			}
+			fclose(fp);
+
+			sha256_final(&manifest_ctx, manifest_digest);
+			sha256_to_hex(manifest_digest, manifest_hex);
+
+			if (strcasecmp(manifest_hex, stored_manifest_cksum) != 0)
+			{
+				snprintf(msg, sizeof(msg),
+						 "backup_manifest self-checksum mismatch "
+						 "(expected %s, got %s)",
+						 stored_manifest_cksum, manifest_hex);
+				add_error(result, msg);
+				errors++;
+			}
+		}
+	}
+	else if (!have_manifest_cksum)
+	{
+		add_warning(result,
+					"backup_manifest has no Manifest-Checksum "
+					"(PostgreSQL < 13 or truncated manifest)");
+	}
+
+	/*
+	 * For tar format we cannot check individual files without unpacking,
+	 * so stop here — the manifest self-checksum above is sufficient.
+	 */
+	if (is_tar)
+		goto done;
+
+	/*
+	 * Second pass: validate per-file checksums (SHA256 and CRC32C).
+	 */
+	fp = fopen(manifest_path, "r");
+	if (fp == NULL)
+		goto done;
+
+	entry_path[0]  = '\0';
+	entry_algo[0]  = '\0';
+	entry_cksum[0] = '\0';
+	entry_size     = 0;
+	have_path = have_algo = have_cksum = have_size = false;
+
+	while (fgets(line, sizeof(line), fp) != NULL)
+	{
+		/* Stop at Manifest-Checksum — no more file entries after it */
+		if (strstr(line, "\"Manifest-Checksum\"") != NULL)
+			break;
+
+		/* Accumulate fields for the current entry */
+		if (!have_path)
+			have_path = json_extract_string(line, "\"Path\"",
+											entry_path, sizeof(entry_path));
+		if (!have_algo)
+			have_algo = json_extract_string(line, "\"Checksum-Algorithm\"",
+											entry_algo, sizeof(entry_algo));
+		if (!have_cksum)
+			have_cksum = json_extract_string(line, "\"Checksum\"",
+											 entry_cksum, sizeof(entry_cksum));
+		if (!have_size)
+			have_size = json_extract_uint64(line, "\"Size\"", &entry_size);
+
+		/*
+		 * Once we have Path + Algorithm + Checksum (or NONE), validate.
+		 * Entry is complete when we have at minimum: path + algo + cksum,
+		 * OR path + algo=NONE + size.
+		 */
+		if (!have_path || !have_algo)
+			continue;
+		if (!have_cksum && !(strcasecmp(entry_algo, "NONE") == 0 && have_size))
+			continue;
+
+		{
+			char file_path[PATH_MAX];
+			bool skip = false;
+
+			path_join(file_path, sizeof(file_path),
+					  backup->backup_path, entry_path);
+
+			/* Skip pg_wal entries — covered by WAL validation */
+			if (strncmp(entry_path, "pg_wal/", 7) == 0 ||
+				strcmp(entry_path, "pg_wal") == 0)
+				skip = true;
+
+			if (!skip)
+			{
+				if (!file_exists(file_path))
+				{
+					/* Missing files only matter if size > 0 */
+					if (!have_size || entry_size > 0)
+					{
+						snprintf(msg, sizeof(msg),
+								 "Missing file: %s", entry_path);
+						add_error(result, msg);
+						errors++;
+					}
+				}
+				else if (strcasecmp(entry_algo, "SHA256") == 0)
+				{
+					uint8_t digest[SHA256_DIGEST_LENGTH];
+					char    hex[SHA256_HEX_LENGTH + 1];
+
+					checked++;
+					if (sha256_file(file_path, digest))
+					{
+						sha256_to_hex(digest, hex);
+						if (strcasecmp(hex, entry_cksum) != 0)
+						{
+							snprintf(msg, sizeof(msg),
+									 "SHA256 mismatch: %s "
+									 "(expected %.16s…, got %.16s…)",
+									 entry_path, entry_cksum, hex);
+							add_error(result, msg);
+							errors++;
+						}
+					}
+					else
+					{
+						snprintf(msg, sizeof(msg),
+								 "Cannot read file for checksum: %s",
+								 entry_path);
+						add_warning(result, msg);
+					}
+				}
+				else if (strcasecmp(entry_algo, "CRC32C") == 0)
+				{
+					uint32_t crc = 0;
+					uint32_t expected;
+
+					checked++;
+
+					/*
+					 * PostgreSQL stores CRC32C as little-endian bytes,
+					 * each byte printed as 2 hex digits (pg_checksum_final).
+					 * e.g. value 0xFB8EEC93 → "93EC8EFB".
+					 * Parse byte-by-byte and reconstruct as LE uint32.
+					 */
+					{
+						uint8_t b[4] = {0, 0, 0, 0};
+						size_t  hlen = strlen(entry_cksum);
+
+						if (hlen == 8)
+						{
+							for (int bi = 0; bi < 4; bi++)
+							{
+								char tmp[3] = { entry_cksum[bi*2],
+												entry_cksum[bi*2+1], '\0' };
+								b[bi] = (uint8_t)strtoul(tmp, NULL, 16);
+							}
+						}
+						expected = (uint32_t)b[0]
+								 | ((uint32_t)b[1] << 8)
+								 | ((uint32_t)b[2] << 16)
+								 | ((uint32_t)b[3] << 24);
+					}
+
+					if (compute_file_crc32c(file_path, &crc))
+					{
+						if (crc != expected)
+						{
+							snprintf(msg, sizeof(msg),
+									 "CRC32C mismatch: %s "
+									 "(expected %08X, got %08X)",
+									 entry_path, expected, crc);
+							add_error(result, msg);
+							errors++;
+						}
+					}
+					else
+					{
+						snprintf(msg, sizeof(msg),
+								 "Cannot read file for checksum: %s",
+								 entry_path);
+						add_warning(result, msg);
+					}
+				}
+				/* NONE: presence already verified above */
+			}
+		}
+
+		/* Reset for next entry */
+		entry_path[0] = entry_algo[0] = entry_cksum[0] = '\0';
+		entry_size = 0;
+		have_path = have_algo = have_cksum = have_size = false;
+	}
+
+	fclose(fp);
+
+	(void)checked;   /* available for debug output if needed */
+	(void)errors;
+
+done:
+	if (result->error_count > 0)
+		result->status = BACKUP_STATUS_ERROR;
+	else if (result->warning_count > 0)
+		result->status = BACKUP_STATUS_WARNING;
+
+	return result;
 }
