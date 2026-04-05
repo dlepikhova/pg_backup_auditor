@@ -157,6 +157,47 @@ pgbackrest_validate_structure(BackupInfo *backup)
 		}
 	}
 
+	/*
+	 * Check backup-error field in backup.manifest.
+	 * pgBackRest writes "backup-error=y" when the backup completed with errors
+	 * (e.g. modified files during backup).  Such a backup may be unusable.
+	 */
+	{
+		char   manifest_path[PATH_MAX];
+		FILE  *fp;
+		char   line[INI_MAX_LINE];
+
+		path_join(manifest_path, sizeof(manifest_path),
+				  backup->backup_path, "backup.manifest");
+		fp = fopen(manifest_path, "r");
+		if (fp != NULL)
+		{
+			bool in_backup_section = false;
+			while (fgets(line, sizeof(line), fp) != NULL)
+			{
+				/* Detect [backup] section */
+				if (line[0] == '[')
+				{
+					in_backup_section = (strncmp(line, "[backup]", 8) == 0);
+					if (!in_backup_section && line[1] != 'b')
+						break;   /* past [backup] section */
+					continue;
+				}
+				if (!in_backup_section)
+					continue;
+
+				if (strncmp(line, "backup-error=y", 14) == 0)
+				{
+					add_error(result,
+							  "backup.manifest reports backup-error=y "
+							  "(backup completed with errors — may not be restorable)");
+					break;
+				}
+			}
+			fclose(fp);
+		}
+	}
+
 	/* backup.manifest.copy (redundant copy, absence is a soft warning) */
 	path_join(path, sizeof(path), backup->backup_path, "backup.manifest.copy");
 	if (!file_exists(path))

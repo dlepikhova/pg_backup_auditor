@@ -591,6 +591,41 @@ START_TEST(test_validate_struct_missing_pg_data)
 }
 END_TEST
 
+/* backup-error=y in manifest → error */
+START_TEST(test_validate_struct_backup_error)
+{
+	char dir[PATH_MAX], path[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vsbe_%d", getpid());
+	mkdir(dir, 0755);
+
+	make_pgbackrest_plain_structure(dir);
+
+	/* Overwrite backup.manifest with backup-error=y */
+	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	FILE *fp = fopen(path, "w");
+	fprintf(fp, "[backup]\nbackup-label=test\nbackup-error=y\n\n[backup:db]\ndb-version=17\n");
+	fclose(fp);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_validate_structure(bi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_ge(r->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < r->error_count; i++)
+		if (strstr(r->errors[i], "backup-error=y")) found = true;
+	ck_assert_msg(found, "expected backup-error=y error");
+	ck_assert_int_eq(r->status, BACKUP_STATUS_ERROR);
+
+	free_validation_result(r);
+	free(bi);
+
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	system(cmd);
+}
+END_TEST
+
 /* ------------------------------------------------------------------ *
  * pgbackrest_check_manifest_checksums tests
  * ------------------------------------------------------------------ */
@@ -989,6 +1024,7 @@ pgbackrest_suite(void)
 	tcase_add_test(tc_validate, test_validate_struct_missing_pg_version);
 	tcase_add_test(tc_validate, test_validate_struct_missing_manifest);
 	tcase_add_test(tc_validate, test_validate_struct_missing_pg_data);
+	tcase_add_test(tc_validate, test_validate_struct_backup_error);
 	suite_add_tcase(s, tc_validate);
 
 	/* Test case for manifest checksums */
