@@ -247,10 +247,21 @@ validate_single_backup(BackupInfo *backup, WALArchiveInfo *wal_info,
 			free_validation_result(cr);
 		}
 
-		/* File-level checksums (pg_basebackup: backup_manifest SHA256) */
+		/* File-level checksums (pg_basebackup: backup_manifest SHA256/CRC32C) */
 		if (backup->tool == BACKUP_TOOL_PG_BASEBACKUP)
 		{
 			ValidationResult *mr = check_manifest_checksums(backup);
+			if (mr != NULL)
+			{
+				merge_result(result, mr, NULL);
+				free_validation_result(mr);
+			}
+		}
+
+		/* File-level checksums (pgbackrest: backup.manifest [target:file] SHA1) */
+		if (backup->tool == BACKUP_TOOL_PGBACKREST)
+		{
+			ValidationResult *mr = pgbackrest_check_manifest_checksums(backup);
 			if (mr != NULL)
 			{
 				merge_result(result, mr, NULL);

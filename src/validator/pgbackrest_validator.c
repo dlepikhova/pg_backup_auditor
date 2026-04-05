@@ -23,9 +23,13 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "pg_backup_auditor.h"
+#include "ini_parser.h"
+#include "sha256.h"
 #include <stdlib.h>
 #include <string.h>
 #include <dirent.h>
+#include <stdio.h>
+#include <strings.h>
 
 static void
 add_error(ValidationResult *result, const char *message)
@@ -159,6 +163,221 @@ pgbackrest_validate_structure(BackupInfo *backup)
 		add_warning(result,
 					"Missing backup.manifest.copy "
 					"(redundant copy absent — not critical)");
+
+	if (result->error_count > 0)
+		result->status = BACKUP_STATUS_ERROR;
+	else if (result->warning_count > 0)
+		result->status = BACKUP_STATUS_WARNING;
+
+	return result;
+}
+
+/* ------------------------------------------------------------------ *
+ * pgbackrest_check_manifest_checksums
+ *
+ * Validates per-file SHA1 checksums stored in the [target:file] section
+ * of backup.manifest.
+ *
+ * Each entry has the form:
+ *   pg_data/some/file={"checksum":"<sha1hex>","size":<n>,...}
+ *
+ * For every file that has a "checksum" field:
+ *   - verify the file exists at backup_path/key
+ *   - compute SHA1 and compare
+ *
+ * Files without "checksum" (checksum-page=true block files where pgbackrest
+ * stores page-level checksums separately, or zero-size files) are skipped —
+ * their integrity is covered by PostgreSQL's own page checksums.
+ *
+ * Returns NULL if backup.manifest does not exist or backup is not pgbackrest.
+ * Only works for plain (uncompressed) backups — compressed data files are
+ * opaque without unpacking.
+ * ------------------------------------------------------------------ */
+
+/*
+ * Extract a JSON string value: {"checksum":"<value>",...}
+ * Returns pointer into a static buffer, or NULL if not found.
+ */
+static const char *
+extract_json_str(const char *json, const char *key)
+{
+	static char buf[256];
+	char        search[64];
+	const char *p, *q;
+	size_t      len;
+
+	snprintf(search, sizeof(search), "\"%s\":\"", key);
+	p = strstr(json, search);
+	if (p == NULL)
+		return NULL;
+
+	p += strlen(search);
+	q  = strchr(p, '"');
+	if (q == NULL)
+		return NULL;
+
+	len = (size_t)(q - p);
+	if (len >= sizeof(buf))
+		len = sizeof(buf) - 1;
+	memcpy(buf, p, len);
+	buf[len] = '\0';
+	return buf;
+}
+
+/*
+ * Compute SHA1 of a file.  Returns true on success.
+ * We reuse our SHA256 infrastructure but pgbackrest uses SHA1 (40 hex chars).
+ * Since we don't have a standalone SHA1 implementation, we shell out to
+ * shasum/sha1sum — portable across macOS and Linux.
+ */
+static bool
+compute_file_sha1(const char *path, char *out_hex, size_t out_sz)
+{
+	/*
+	 * Try shasum -a 1 (macOS, also available on Linux via Perl)
+	 * then fall back to sha1sum (coreutils, Linux/FreeBSD).
+	 * Output format for both: "<40-hex-chars>  filename\n"
+	 */
+	static const char * const cmdfmt[] = {
+		"shasum -a 1 -- '%s' 2>/dev/null",
+		"sha1sum -- '%s' 2>/dev/null",
+		NULL
+	};
+	char   cmd[PATH_MAX + 32];
+	FILE  *fp;
+	char   line[256];
+	size_t len;
+	int    i;
+
+	if (out_sz < 41)
+		return false;
+
+	for (i = 0; cmdfmt[i] != NULL; i++)
+	{
+		snprintf(cmd, sizeof(cmd), cmdfmt[i], path);
+		fp = popen(cmd, "r");
+		if (fp == NULL)
+			continue;
+
+		line[0] = '\0';
+		if (fgets(line, sizeof(line), fp) == NULL)
+			line[0] = '\0';
+		pclose(fp);
+
+		/* Verify we got 40 hex chars */
+		len = 0;
+		while (len < 40 && line[len] != '\0' &&
+			   ((line[len] >= '0' && line[len] <= '9') ||
+				(line[len] >= 'a' && line[len] <= 'f') ||
+				(line[len] >= 'A' && line[len] <= 'F')))
+			len++;
+
+		if (len == 40)
+		{
+			memcpy(out_hex, line, 40);
+			out_hex[40] = '\0';
+			return true;
+		}
+	}
+
+	return false;
+}
+
+ValidationResult *
+pgbackrest_check_manifest_checksums(BackupInfo *backup)
+{
+	ValidationResult *result;
+	char              manifest_path[PATH_MAX];
+	IniFile          *ini;
+	IniSection       *section;
+	IniKeyValue      *kv;
+	char              msg[PATH_MAX + 128];
+	bool              is_plain;
+
+	if (backup == NULL || backup->backup_path[0] == '\0')
+		return NULL;
+
+	if (backup->tool != BACKUP_TOOL_PGBACKREST)
+		return NULL;
+
+	path_join(manifest_path, sizeof(manifest_path),
+			  backup->backup_path, "backup.manifest");
+	if (!file_exists(manifest_path))
+		return NULL;
+
+	/* Only plain backups: pg_data/ must be a real directory */
+	{
+		char pg_data[PATH_MAX];
+		path_join(pg_data, sizeof(pg_data), backup->backup_path, "pg_data");
+		is_plain = is_directory(pg_data);
+	}
+	if (!is_plain)
+		return NULL;   /* compressed — cannot check without unpacking */
+
+	ini = ini_parse_file(manifest_path);
+	if (ini == NULL)
+		return NULL;
+
+	section = ini_get_section(ini, "target:file");
+	if (section == NULL)
+	{
+		ini_free(ini);
+		return NULL;
+	}
+
+	result = calloc(1, sizeof(ValidationResult));
+	if (result == NULL)
+	{
+		ini_free(ini);
+		return NULL;
+	}
+	result->status = BACKUP_STATUS_OK;
+
+	for (kv = section->first_kv; kv != NULL; kv = kv->next)
+	{
+		const char *rel_path  = kv->key;   /* e.g. "pg_data/PG_VERSION" */
+		const char *json      = kv->value;
+		const char *checksum;
+		char        file_path[PATH_MAX];
+		char        actual[41];
+
+		/* Skip pg_wal entries — covered by WAL validation */
+		if (strncmp(rel_path, "pg_data/pg_wal/", 15) == 0 ||
+			strcmp(rel_path,  "pg_data/pg_wal")  == 0)
+			continue;
+
+		checksum = extract_json_str(json, "checksum");
+		if (checksum == NULL)
+			continue;   /* no checksum field: zero-size or page-checksum file */
+
+		path_join(file_path, sizeof(file_path),
+				  backup->backup_path, rel_path);
+
+		if (!file_exists(file_path))
+		{
+			snprintf(msg, sizeof(msg), "Missing file: %s", rel_path);
+			add_error(result, msg);
+			continue;
+		}
+
+		if (!compute_file_sha1(file_path, actual, sizeof(actual)))
+		{
+			snprintf(msg, sizeof(msg),
+					 "Cannot compute SHA1 for: %s", rel_path);
+			add_warning(result, msg);
+			continue;
+		}
+
+		if (strcasecmp(actual, checksum) != 0)
+		{
+			snprintf(msg, sizeof(msg),
+					 "SHA1 mismatch: %s (expected %.16s…, got %.16s…)",
+					 rel_path, checksum, actual);
+			add_error(result, msg);
+		}
+	}
+
+	ini_free(ini);
 
 	if (result->error_count > 0)
 		result->status = BACKUP_STATUS_ERROR;

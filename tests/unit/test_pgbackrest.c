@@ -592,6 +592,235 @@ START_TEST(test_validate_struct_missing_pg_data)
 END_TEST
 
 /* ------------------------------------------------------------------ *
+ * pgbackrest_check_manifest_checksums tests
+ * ------------------------------------------------------------------ */
+
+/* Compute SHA1 of a small string - used to build valid manifest entries */
+static void
+sha1_hex_of_string(const char *content, size_t len, char *out_hex)
+{
+	static const char * const fmts[] = {
+		"shasum -a 1 -- '%s' 2>/dev/null",
+		"sha1sum -- '%s' 2>/dev/null",
+		NULL
+	};
+	char  tmp_path[PATH_MAX];
+	FILE *fp;
+	int   i;
+
+	strcpy(out_hex, "0000000000000000000000000000000000000000");
+
+	snprintf(tmp_path, sizeof(tmp_path), "/tmp/pbr_sha1_%d", getpid());
+	fp = fopen(tmp_path, "wb");
+	if (fp == NULL)
+		return;
+	fwrite(content, 1, len, fp);
+	fclose(fp);
+
+	for (i = 0; fmts[i] != NULL; i++)
+	{
+		char  cmd[PATH_MAX + 32];
+		FILE *pp;
+		char  line[256];
+		size_t hlen;
+
+		snprintf(cmd, sizeof(cmd), fmts[i], tmp_path);
+		pp = popen(cmd, "r");
+		if (pp == NULL)
+			continue;
+
+		line[0] = '\0';
+		fgets(line, sizeof(line), pp);
+		pclose(pp);
+
+		hlen = 0;
+		while (hlen < 40 && line[hlen] != '\0' &&
+			   ((line[hlen] >= '0' && line[hlen] <= '9') ||
+				(line[hlen] >= 'a' && line[hlen] <= 'f') ||
+				(line[hlen] >= 'A' && line[hlen] <= 'F')))
+			hlen++;
+
+		if (hlen == 40)
+		{
+			memcpy(out_hex, line, 40);
+			out_hex[40] = '\0';
+			break;
+		}
+	}
+
+	unlink(tmp_path);
+}
+
+/* NULL / not pgbackrest → NULL */
+START_TEST(test_pbr_checksums_null_input)
+{
+	ck_assert_ptr_null(pgbackrest_check_manifest_checksums(NULL));
+}
+END_TEST
+
+/* No backup.manifest → NULL (not applicable) */
+START_TEST(test_pbr_checksums_no_manifest)
+{
+	char dir[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pbr_ck_nomnf_%d", getpid());
+	mkdir(dir, 0755);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_check_manifest_checksums(bi);
+	ck_assert_ptr_null(r);
+
+	free(bi);
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	system(cmd);
+}
+END_TEST
+
+/* Compressed backup (no pg_data/ dir) → NULL */
+START_TEST(test_pbr_checksums_compressed)
+{
+	char dir[PATH_MAX], path[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pbr_ck_cmp_%d", getpid());
+	mkdir(dir, 0755);
+
+	/* manifest exists but pg_data/ is absent (compressed backup) */
+	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	touch_file(path);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_check_manifest_checksums(bi);
+	ck_assert_ptr_null(r);
+
+	free(bi);
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	system(cmd);
+}
+END_TEST
+
+/* All checksums correct → 0 errors */
+START_TEST(test_pbr_checksums_all_ok)
+{
+	char dir[PATH_MAX], path[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pbr_ck_ok_%d", getpid());
+	mkdir(dir, 0755);
+
+	/* Create pg_data/ with one file */
+	snprintf(path, sizeof(path), "%s/pg_data", dir);
+	mkdir(path, 0755);
+
+	const char *content = "17\n";
+	snprintf(path, sizeof(path), "%s/pg_data/PG_VERSION", dir);
+	FILE *fp = fopen(path, "w");
+	fputs(content, fp);
+	fclose(fp);
+
+	/* Compute correct SHA1 */
+	char sha1[41];
+	sha1_hex_of_string(content, strlen(content), sha1);
+
+	/* Write manifest with correct checksum */
+	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	fp = fopen(path, "w");
+	fprintf(fp, "[backup]\nbackup-label=test\n\n");
+	fprintf(fp, "[target:file]\n");
+	fprintf(fp, "pg_data/PG_VERSION={\"checksum\":\"%s\",\"size\":3}\n", sha1);
+	fclose(fp);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_check_manifest_checksums(bi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	ck_assert_int_eq(r->status, BACKUP_STATUS_OK);
+
+	free_validation_result(r);
+	free(bi);
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	system(cmd);
+}
+END_TEST
+
+/* Checksum mismatch → 1 error */
+START_TEST(test_pbr_checksums_mismatch)
+{
+	char dir[PATH_MAX], path[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pbr_ck_mis_%d", getpid());
+	mkdir(dir, 0755);
+
+	snprintf(path, sizeof(path), "%s/pg_data", dir);
+	mkdir(path, 0755);
+
+	snprintf(path, sizeof(path), "%s/pg_data/PG_VERSION", dir);
+	FILE *fp = fopen(path, "w");
+	fputs("17\n", fp);
+	fclose(fp);
+
+	/* Write manifest with WRONG checksum */
+	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	fp = fopen(path, "w");
+	fprintf(fp, "[backup]\nbackup-label=test\n\n");
+	fprintf(fp, "[target:file]\n");
+	fprintf(fp, "pg_data/PG_VERSION={\"checksum\":\"0000000000000000000000000000000000000000\",\"size\":3}\n");
+	fclose(fp);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_check_manifest_checksums(bi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_ge(r->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < r->error_count; i++)
+		if (strstr(r->errors[i], "SHA1 mismatch")) found = true;
+	ck_assert_msg(found, "expected SHA1 mismatch error");
+	ck_assert_int_eq(r->status, BACKUP_STATUS_ERROR);
+
+	free_validation_result(r);
+	free(bi);
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	system(cmd);
+}
+END_TEST
+
+/* Missing file listed in manifest → error */
+START_TEST(test_pbr_checksums_missing_file)
+{
+	char dir[PATH_MAX], path[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pbr_ck_mf_%d", getpid());
+	mkdir(dir, 0755);
+
+	snprintf(path, sizeof(path), "%s/pg_data", dir);
+	mkdir(path, 0755);
+
+	/* manifest lists a file that doesn't exist on disk */
+	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	FILE *fp = fopen(path, "w");
+	fprintf(fp, "[backup]\nbackup-label=test\n\n");
+	fprintf(fp, "[target:file]\n");
+	fprintf(fp, "pg_data/missing_file={\"checksum\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size\":100}\n");
+	fclose(fp);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_check_manifest_checksums(bi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_ge(r->error_count, 1);
+	bool found = false;
+	for (int i = 0; i < r->error_count; i++)
+		if (strstr(r->errors[i], "Missing file")) found = true;
+	ck_assert_msg(found, "expected 'Missing file' error");
+
+	free_validation_result(r);
+	free(bi);
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	system(cmd);
+}
+END_TEST
+
+/* ------------------------------------------------------------------ *
  * pgbackrest chain validation tests
  * ------------------------------------------------------------------ */
 
@@ -761,6 +990,16 @@ pgbackrest_suite(void)
 	tcase_add_test(tc_validate, test_validate_struct_missing_manifest);
 	tcase_add_test(tc_validate, test_validate_struct_missing_pg_data);
 	suite_add_tcase(s, tc_validate);
+
+	/* Test case for manifest checksums */
+	TCase *tc_checksums = tcase_create("manifest_checksums");
+	tcase_add_test(tc_checksums, test_pbr_checksums_null_input);
+	tcase_add_test(tc_checksums, test_pbr_checksums_no_manifest);
+	tcase_add_test(tc_checksums, test_pbr_checksums_compressed);
+	tcase_add_test(tc_checksums, test_pbr_checksums_all_ok);
+	tcase_add_test(tc_checksums, test_pbr_checksums_mismatch);
+	tcase_add_test(tc_checksums, test_pbr_checksums_missing_file);
+	suite_add_tcase(s, tc_checksums);
 
 	/* Test case for chain validation */
 	TCase *tc_chain = tcase_create("chain_validation");

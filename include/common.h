@@ -104,6 +104,7 @@ ValidationResult* check_manifest_checksums(BackupInfo *backup);
 
 /* validator/pgbackrest_validator.c */
 ValidationResult* pgbackrest_validate_structure(BackupInfo *backup);
+ValidationResult* pgbackrest_check_manifest_checksums(BackupInfo *backup);
 
 /* validator/wal_validator.c - WAL validation */
 ValidationResult* check_wal_continuity(WALArchiveInfo *wal_info);
