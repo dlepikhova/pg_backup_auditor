@@ -369,8 +369,9 @@ validate_backup_chain(BackupInfo *backup, BackupInfo *all_backups,
 	if (result == NULL)
 		return NULL;
 
-	/* Step 2: pg_probackup chain checks */
-	if (backup->tool != BACKUP_TOOL_PG_PROBACKUP)
+	/* Step 2: chain checks (pg_probackup and pgbackrest) */
+	if (backup->tool != BACKUP_TOOL_PG_PROBACKUP &&
+		backup->tool != BACKUP_TOOL_PGBACKREST)
 		goto done;
 
 	if (backup->type == BACKUP_TYPE_FULL)
@@ -386,8 +387,9 @@ validate_backup_chain(BackupInfo *backup, BackupInfo *all_backups,
 		goto done;
 	}
 
-	if (backup->type != BACKUP_TYPE_DELTA &&
-		backup->type != BACKUP_TYPE_PAGE  &&
+	if (backup->type != BACKUP_TYPE_DELTA       &&
+		backup->type != BACKUP_TYPE_INCREMENTAL  &&
+		backup->type != BACKUP_TYPE_PAGE         &&
 		backup->type != BACKUP_TYPE_PTRACK)
 		goto done;
 

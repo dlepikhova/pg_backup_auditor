@@ -129,6 +129,30 @@ pgbackrest_validate_structure(BackupInfo *backup)
 	if (!has_pg_data(backup->backup_path))
 		add_error(result, "Missing pg_data directory or archive");
 
+	/*
+	 * For plain (uncompressed) backups pg_data/ is a real directory and we
+	 * can verify critical files inside it.  Compressed variants (pg_data.gz
+	 * etc.) are opaque — skip inner checks for them.
+	 */
+	{
+		char pg_data[PATH_MAX];
+		path_join(pg_data, sizeof(pg_data), backup->backup_path, "pg_data");
+		if (is_directory(pg_data))
+		{
+			/* pg_data/global/pg_control */
+			char ctrl[PATH_MAX];
+			path_join(ctrl, sizeof(ctrl), pg_data, "global");
+			path_join(ctrl, sizeof(ctrl), ctrl, "pg_control");
+			if (!file_exists(ctrl))
+				add_warning(result, "Missing pg_data/global/pg_control");
+
+			/* pg_data/PG_VERSION */
+			path_join(path, sizeof(path), pg_data, "PG_VERSION");
+			if (!file_exists(path))
+				add_warning(result, "Missing pg_data/PG_VERSION");
+		}
+	}
+
 	/* backup.manifest.copy (redundant copy, absence is a soft warning) */
 	path_join(path, sizeof(path), backup->backup_path, "backup.manifest.copy");
 	if (!file_exists(path))

@@ -191,6 +191,11 @@ pg_basebackup_validate_structure(BackupInfo *backup)
 						  "(at least one is required)");
 		}
 
+		/* PG_VERSION — always present in a valid plain backup */
+		path_join(path, sizeof(path), backup->backup_path, "PG_VERSION");
+		if (!file_exists(path))
+			add_warning(result, "Missing PG_VERSION");
+
 		if (backup->wal_stream)
 		{
 			path_join(path, sizeof(path), backup->backup_path, "pg_wal");

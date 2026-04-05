@@ -1149,6 +1149,9 @@ make_basebackup_plain_structure(const char *bdir, bool stream)
 	snprintf(path, sizeof(path), "%s/backup_label", bdir);
 	write_file(path, "START WAL LOCATION: 0/1000028\n", 30);
 
+	snprintf(path, sizeof(path), "%s/PG_VERSION", bdir);
+	write_file(path, "17\n", 3);
+
 	if (stream)
 	{
 		snprintf(path, sizeof(path), "%s/pg_wal", bdir);
@@ -1349,6 +1352,32 @@ START_TEST(test_bb_struct_tar_stream_missing_pg_wal)
 	for (int i = 0; i < res->warning_count; i++)
 		if (strstr(res->warnings[i], "pg_wal")) found = true;
 	ck_assert_msg(found, "expected warning about missing pg_wal.tar");
+	free_validation_result(res);
+
+	teardown_test_dirs();
+}
+END_TEST
+
+/* Plain: PG_VERSION missing → warning mentioning "PG_VERSION" */
+START_TEST(test_bb_struct_plain_missing_pg_version)
+{
+	setup_test_dirs();
+	make_basebackup_plain_structure(backup_dir, false);
+
+	char path[PATH_MAX];
+	snprintf(path, sizeof(path), "%s/PG_VERSION", backup_dir);
+	unlink(path);
+
+	BackupInfo        bi  = make_bb_backup(false);
+	ValidationResult *res = pg_basebackup_validate_structure(&bi);
+
+	ck_assert_ptr_nonnull(res);
+	ck_assert_int_eq(res->error_count, 0);
+	ck_assert_int_ge(res->warning_count, 1);
+	bool found = false;
+	for (int i = 0; i < res->warning_count; i++)
+		if (strstr(res->warnings[i], "PG_VERSION")) found = true;
+	ck_assert_msg(found, "expected warning about missing PG_VERSION");
 	free_validation_result(res);
 
 	teardown_test_dirs();
@@ -1676,6 +1705,8 @@ backup_validator_suite(void)
 	tcase_add_test(tc_bb_struct, test_bb_struct_tar_ok);
 	/* Tar: stream backup missing pg_wal.tar → warning */
 	tcase_add_test(tc_bb_struct, test_bb_struct_tar_stream_missing_pg_wal);
+	/* Plain: PG_VERSION missing → warning */
+	tcase_add_test(tc_bb_struct, test_bb_struct_plain_missing_pg_version);
 	suite_add_tcase(s, tc_bb_struct);
 
 	/* ------------------------------------------------------------------ *

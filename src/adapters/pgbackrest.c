@@ -275,6 +275,12 @@ parse_pgbackrest_backup_info(const char *backup_info_path, const char *stanza_na
 		if (lsn_stop != NULL)
 			parse_lsn(lsn_stop, &info->stop_lsn);
 
+		/* Parent backup (DIFF and INCR backups) */
+		const char *prior = get_json_value(json_value, "backup-prior");
+		if (prior != NULL)
+			strncpy(info->parent_backup_id, prior,
+					sizeof(info->parent_backup_id) - 1);
+
 		/* Build backup path */
 		backup_dir = strrchr(backup_info_path, '/');
 		if (backup_dir != NULL)

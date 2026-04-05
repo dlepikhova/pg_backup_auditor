@@ -396,27 +396,76 @@ START_TEST(test_validate_struct_null_input)
 }
 END_TEST
 
-START_TEST(test_validate_struct_ok)
+/* Helper: create a full plain pgbackrest backup structure */
+static void
+make_pgbackrest_plain_structure(const char *dir)
 {
-	char dir[PATH_MAX], path[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vs_%d", getpid());
-	mkdir(dir, 0755);
+	char path[PATH_MAX];
 
-	/* Create backup.manifest */
 	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
 	touch_file(path);
 
-	/* Create pg_data/ */
+	snprintf(path, sizeof(path), "%s/backup.manifest.copy", dir);
+	touch_file(path);
+
 	snprintf(path, sizeof(path), "%s/pg_data", dir);
 	mkdir(path, 0755);
+
+	snprintf(path, sizeof(path), "%s/pg_data/global", dir);
+	mkdir(path, 0755);
+
+	snprintf(path, sizeof(path), "%s/pg_data/global/pg_control", dir);
+	touch_file(path);
+
+	snprintf(path, sizeof(path), "%s/pg_data/PG_VERSION", dir);
+	touch_file(path);
+}
+
+/* Full structure with manifest.copy → 0 errors, 0 warnings */
+START_TEST(test_validate_struct_ok)
+{
+	char dir[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vs_%d", getpid());
+	mkdir(dir, 0755);
+
+	make_pgbackrest_plain_structure(dir);
 
 	BackupInfo *bi = make_pgbackrest_backup_info(dir);
 	ValidationResult *r = pgbackrest_validate_structure(bi);
 
 	ck_assert_ptr_nonnull(r);
 	ck_assert_int_eq(r->error_count, 0);
-	/* No manifest.copy → 1 warning */
-	ck_assert_int_eq(r->warning_count, 1);
+	ck_assert_int_eq(r->warning_count, 0);
+	ck_assert_int_eq(r->status, BACKUP_STATUS_OK);
+
+	free_validation_result(r);
+	free(bi);
+
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	system(cmd);
+}
+END_TEST
+
+/* No manifest.copy → 1 warning */
+START_TEST(test_validate_struct_ok_without_copy)
+{
+	char dir[PATH_MAX], path[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vsc_%d", getpid());
+	mkdir(dir, 0755);
+
+	make_pgbackrest_plain_structure(dir);
+
+	/* Remove the copy */
+	snprintf(path, sizeof(path), "%s/backup.manifest.copy", dir);
+	unlink(path);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_validate_structure(bi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	ck_assert_int_ge(r->warning_count, 1);
 	ck_assert_int_eq(r->status, BACKUP_STATUS_WARNING);
 
 	free_validation_result(r);
@@ -428,28 +477,58 @@ START_TEST(test_validate_struct_ok)
 }
 END_TEST
 
-START_TEST(test_validate_struct_ok_with_copy)
+/* Missing pg_data/global/pg_control → warning mentioning "pg_control" */
+START_TEST(test_validate_struct_missing_pg_control)
 {
 	char dir[PATH_MAX], path[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vsc_%d", getpid());
+	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vspc_%d", getpid());
 	mkdir(dir, 0755);
 
-	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
-	touch_file(path);
-
-	snprintf(path, sizeof(path), "%s/backup.manifest.copy", dir);
-	touch_file(path);
-
-	snprintf(path, sizeof(path), "%s/pg_data", dir);
-	mkdir(path, 0755);
+	make_pgbackrest_plain_structure(dir);
+	snprintf(path, sizeof(path), "%s/pg_data/global/pg_control", dir);
+	unlink(path);
 
 	BackupInfo *bi = make_pgbackrest_backup_info(dir);
 	ValidationResult *r = pgbackrest_validate_structure(bi);
 
 	ck_assert_ptr_nonnull(r);
 	ck_assert_int_eq(r->error_count, 0);
-	ck_assert_int_eq(r->warning_count, 0);
-	ck_assert_int_eq(r->status, BACKUP_STATUS_OK);
+	ck_assert_int_ge(r->warning_count, 1);
+	bool found = false;
+	for (int i = 0; i < r->warning_count; i++)
+		if (strstr(r->warnings[i], "pg_control")) found = true;
+	ck_assert_msg(found, "expected warning about missing pg_control");
+
+	free_validation_result(r);
+	free(bi);
+
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
+	system(cmd);
+}
+END_TEST
+
+/* Missing pg_data/PG_VERSION → warning mentioning "PG_VERSION" */
+START_TEST(test_validate_struct_missing_pg_version)
+{
+	char dir[PATH_MAX], path[PATH_MAX];
+	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vspv_%d", getpid());
+	mkdir(dir, 0755);
+
+	make_pgbackrest_plain_structure(dir);
+	snprintf(path, sizeof(path), "%s/pg_data/PG_VERSION", dir);
+	unlink(path);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_validate_structure(bi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 0);
+	ck_assert_int_ge(r->warning_count, 1);
+	bool found = false;
+	for (int i = 0; i < r->warning_count; i++)
+		if (strstr(r->warnings[i], "PG_VERSION")) found = true;
+	ck_assert_msg(found, "expected warning about missing PG_VERSION");
 
 	free_validation_result(r);
 	free(bi);
@@ -512,6 +591,130 @@ START_TEST(test_validate_struct_missing_pg_data)
 }
 END_TEST
 
+/* ------------------------------------------------------------------ *
+ * pgbackrest chain validation tests
+ * ------------------------------------------------------------------ */
+
+/* Helper: make a minimal BackupInfo on heap */
+static BackupInfo *
+make_pbr_backup(const char *id, BackupType type,
+				const char *parent_id, const char *path)
+{
+	BackupInfo *bi = calloc(1, sizeof(BackupInfo));
+	bi->tool   = BACKUP_TOOL_PGBACKREST;
+	bi->status = BACKUP_STATUS_OK;
+	bi->type   = type;
+	strncpy(bi->backup_id, id, sizeof(bi->backup_id) - 1);
+	if (parent_id != NULL)
+		strncpy(bi->parent_backup_id, parent_id,
+				sizeof(bi->parent_backup_id) - 1);
+	if (path != NULL)
+		strncpy(bi->backup_path, path, sizeof(bi->backup_path) - 1);
+	return bi;
+}
+
+/* FULL with no parent → 0 chain errors */
+START_TEST(test_chain_full_no_parent)
+{
+	BackupInfo *full = make_pbr_backup("20240101-120000F",
+									   BACKUP_TYPE_FULL, NULL, "/nonexistent");
+	ValidationResult *r = validate_backup_chain(full, full, NULL,
+												VALIDATION_LEVEL_STANDARD);
+	ck_assert_ptr_nonnull(r);
+	/* validate_backup_metadata will warn about path/lsn — we only care that
+	 * no chain-specific error mentions "unexpected parent_backup_id" */
+	bool chain_err = false;
+	for (int i = 0; i < r->error_count; i++)
+		if (strstr(r->errors[i], "unexpected parent_backup_id")) chain_err = true;
+	ck_assert_msg(!chain_err,
+				  "FULL with no parent should not produce chain error");
+	free_validation_result(r);
+	free(full);
+}
+END_TEST
+
+/* FULL with unexpected parent → chain error */
+START_TEST(test_chain_full_with_parent)
+{
+	BackupInfo *full = make_pbr_backup("20240101-120000F",
+									   BACKUP_TYPE_FULL,
+									   "20231231-120000F", "/nonexistent");
+	ValidationResult *r = validate_backup_chain(full, full, NULL,
+												VALIDATION_LEVEL_STANDARD);
+	ck_assert_ptr_nonnull(r);
+	bool found = false;
+	for (int i = 0; i < r->error_count; i++)
+		if (strstr(r->errors[i], "unexpected parent_backup_id")) found = true;
+	ck_assert_msg(found, "expected 'unexpected parent_backup_id' error");
+	free_validation_result(r);
+	free(full);
+}
+END_TEST
+
+/* DIFF with valid parent (FULL) → no chain error */
+START_TEST(test_chain_diff_valid_parent)
+{
+	BackupInfo *full = make_pbr_backup("20240101-120000F",
+									   BACKUP_TYPE_FULL, NULL, "/nonexistent");
+	BackupInfo *diff = make_pbr_backup("20240102-120000D",
+									   BACKUP_TYPE_DELTA,
+									   "20240101-120000F", "/nonexistent");
+	full->next = diff;
+
+	ValidationResult *r = validate_backup_chain(diff, full, NULL,
+												VALIDATION_LEVEL_STANDARD);
+	ck_assert_ptr_nonnull(r);
+	bool chain_err = false;
+	for (int i = 0; i < r->error_count; i++)
+		if (strstr(r->errors[i], "not found in catalog") ||
+			strstr(r->errors[i], "Broken chain"))
+			chain_err = true;
+	ck_assert_msg(!chain_err, "DIFF with valid parent should not have chain error");
+	free_validation_result(r);
+	free(full);
+	free(diff);
+}
+END_TEST
+
+/* INCR with missing parent → chain error */
+START_TEST(test_chain_incr_missing_parent)
+{
+	BackupInfo *incr = make_pbr_backup("20240103-120000I",
+									   BACKUP_TYPE_INCREMENTAL,
+									   "20240102-120000D", "/nonexistent");
+	/* catalog has only incr, no parent */
+	ValidationResult *r = validate_backup_chain(incr, incr, NULL,
+												VALIDATION_LEVEL_STANDARD);
+	ck_assert_ptr_nonnull(r);
+	bool found = false;
+	for (int i = 0; i < r->error_count; i++)
+		if (strstr(r->errors[i], "not found in catalog") ||
+			strstr(r->errors[i], "Broken chain"))
+			found = true;
+	ck_assert_msg(found, "expected chain error for missing parent");
+	free_validation_result(r);
+	free(incr);
+}
+END_TEST
+
+/* INCR with no parent_backup_id at all → chain error */
+START_TEST(test_chain_incr_no_parent_id)
+{
+	BackupInfo *incr = make_pbr_backup("20240103-120000I",
+									   BACKUP_TYPE_INCREMENTAL,
+									   NULL, "/nonexistent");
+	ValidationResult *r = validate_backup_chain(incr, incr, NULL,
+												VALIDATION_LEVEL_STANDARD);
+	ck_assert_ptr_nonnull(r);
+	bool found = false;
+	for (int i = 0; i < r->error_count; i++)
+		if (strstr(r->errors[i], "no parent_backup_id")) found = true;
+	ck_assert_msg(found, "expected 'no parent_backup_id' error");
+	free_validation_result(r);
+	free(incr);
+}
+END_TEST
+
 /* Create test suite for pgBackRest adapter */
 Suite *
 pgbackrest_suite(void)
@@ -552,10 +755,21 @@ pgbackrest_suite(void)
 	tc_validate = tcase_create("validate_structure");
 	tcase_add_test(tc_validate, test_validate_struct_null_input);
 	tcase_add_test(tc_validate, test_validate_struct_ok);
-	tcase_add_test(tc_validate, test_validate_struct_ok_with_copy);
+	tcase_add_test(tc_validate, test_validate_struct_ok_without_copy);
+	tcase_add_test(tc_validate, test_validate_struct_missing_pg_control);
+	tcase_add_test(tc_validate, test_validate_struct_missing_pg_version);
 	tcase_add_test(tc_validate, test_validate_struct_missing_manifest);
 	tcase_add_test(tc_validate, test_validate_struct_missing_pg_data);
 	suite_add_tcase(s, tc_validate);
+
+	/* Test case for chain validation */
+	TCase *tc_chain = tcase_create("chain_validation");
+	tcase_add_test(tc_chain, test_chain_full_no_parent);
+	tcase_add_test(tc_chain, test_chain_full_with_parent);
+	tcase_add_test(tc_chain, test_chain_diff_valid_parent);
+	tcase_add_test(tc_chain, test_chain_incr_missing_parent);
+	tcase_add_test(tc_chain, test_chain_incr_no_parent_id);
+	suite_add_tcase(s, tc_chain);
 
 	return s;
 }
