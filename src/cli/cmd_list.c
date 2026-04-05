@@ -193,20 +193,19 @@ validate_options(const ListOptions *opts)
 	/* Validate type filter */
 	if (strcasecmp(opts->type_filter, "auto") != 0 &&
 		strcasecmp(opts->type_filter, "pg_basebackup") != 0 &&
-		strcasecmp(opts->type_filter, "pg_probackup") != 0)
+		strcasecmp(opts->type_filter, "pg_probackup") != 0 &&
+		strcasecmp(opts->type_filter, "pgbackrest") != 0)
 	{
 		fprintf(stderr, "Error: Invalid type filter: %s\n", opts->type_filter);
-		fprintf(stderr, "Valid types: auto, pg_basebackup, pg_probackup (case-insensitive)\n");
+		fprintf(stderr, "Valid types: auto, pg_basebackup, pg_probackup, pgbackrest (case-insensitive)\n");
 		return EXIT_INVALID_ARGUMENTS;
 	}
 
 	/* Validate format */
-	if (strcmp(opts->format, "table") != 0 &&
-		strcmp(opts->format, "json") != 0 &&
-		strcmp(opts->format, "yaml") != 0)
+	if (strcmp(opts->format, "table") != 0)
 	{
 		fprintf(stderr, "Error: Invalid format: %s\n", opts->format);
-		fprintf(stderr, "Valid formats: table, json, yaml\n");
+		fprintf(stderr, "Valid formats: table\n");
 		return EXIT_INVALID_ARGUMENTS;
 	}
 
@@ -228,6 +227,9 @@ matches_filters(const BackupInfo *backup, const ListOptions *opts)
 			return false;
 		if (strcasecmp(opts->type_filter, "pg_probackup") == 0 &&
 			backup->tool != BACKUP_TOOL_PG_PROBACKUP)
+			return false;
+		if (strcasecmp(opts->type_filter, "pgbackrest") == 0 &&
+			backup->tool != BACKUP_TOOL_PGBACKREST)
 			return false;
 	}
 
@@ -350,7 +352,7 @@ sort_backups(BackupInfo *backups, const char *sort_by, bool reverse)
 		return NULL;
 
 	/* Select comparator based on sort_by */
-	if (strcasecmp(sort_by, "time") == 0)
+	if (strcasecmp(sort_by, "time") == 0 || strcasecmp(sort_by, "start_time") == 0)
 		comparator = compare_backups_by_time;
 	else if (strcasecmp(sort_by, "end_time") == 0)
 		comparator = compare_backups_by_end_time;
@@ -658,6 +660,10 @@ output_backups(const BackupInfo *backups, const ListOptions *opts)
 		/* Output each directory group */
 		for (int i = 0; i < num_directories; i++)
 		{
+			/* Stop early if global limit already reached */
+			if (opts->limit > 0 && stats.count >= opts->limit)
+				break;
+
 			/* Build a list of backups for this directory */
 			BackupInfo *dir_list = NULL;
 			BackupInfo *dir_tail = NULL;
@@ -672,7 +678,6 @@ output_backups(const BackupInfo *backups, const ListOptions *opts)
 
 					if (strcmp(parent_dir, directory_paths[i]) == 0)
 					{
-						/* Create a copy for temporary list */
 						BackupInfo *copy = (BackupInfo *) malloc(sizeof(BackupInfo));
 						if (copy != NULL)
 						{
@@ -692,32 +697,23 @@ output_backups(const BackupInfo *backups, const ListOptions *opts)
 
 			if (dir_list != NULL)
 			{
-				/* Sort backups */
-				dir_list = sort_backups(dir_list, opts->sort_by, opts->reverse);
+				/* Remaining slots under the global limit */
+				int remaining = (opts->limit > 0) ? (opts->limit - stats.count) : 0;
 
-				dir_stats = output_directory_group(directory_paths[i], dir_list, opts);
+				/* Temporarily override limit for this group */
+				ListOptions group_opts = *opts;
+				group_opts.limit = remaining;
+
+				dir_list = sort_backups(dir_list, opts->sort_by, opts->reverse);
+				dir_stats = output_directory_group(directory_paths[i], dir_list, &group_opts);
 				stats.count += dir_stats.count;
 				stats.total_bytes += dir_stats.total_bytes;
 
-				/* Free temporary list */
 				free_backup_list(dir_list);
 			}
 		}
 	}
-	else if (strcmp(opts->format, "json") == 0)
-	{
-		/* TODO: Implement JSON output (Phase 2) */
-		fprintf(stderr, "Warning: JSON output not yet implemented\n");
-		fprintf(stderr, "Falling back to table format\n\n");
-		return output_backups(backups, opts);  /* Recursive call with table format */
-	}
-	else
-	{
-		/* YAML - not implemented yet */
-		fprintf(stderr, "Warning: %s output not yet implemented\n", opts->format);
-		fprintf(stderr, "Falling back to table format\n\n");
-		return output_backups(backups, opts);  /* Recursive call with table format */
-	}
+	/* format is validated before reaching here — only "table" is accepted */
 
 	return stats;
 }
@@ -779,10 +775,7 @@ cmd_list_main(int argc, char **argv)
 		return EXIT_NO_BACKUPS_FOUND;
 	}
 
-	/* Sort backups by time */
-	backups = sort_backups(backups, opts.sort_by, opts.reverse);
-
-	/* Output results */
+	/* Output results (sorting is done per-directory group inside output_backups) */
 	stats = output_backups(backups, &opts);
 
 	/* Format total size */

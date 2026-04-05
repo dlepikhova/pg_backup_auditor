@@ -1,26 +1,29 @@
 # pg_backup_auditor
 
-Cross-platform PostgreSQL backup auditor - unified analysis and validation tool for PostgreSQL backups.
-
-## Overview
-
-`pg_backup_auditor` is a command-line utility for auditing, validating, and analyzing PostgreSQL backups created by various backup tools (pg_basebackup, pg_probackup, and more in the future).
+Cross-platform PostgreSQL backup auditor — unified analysis and validation tool for pg_basebackup, pg_probackup, and pgBackRest backups.
 
 ## Features
 
-- Unified interface for pg_basebackup and pg_probackup 2.5.X
-- pg_basebackup: plain and tar formats, all compressions (gzip, bzip2, xz, lz4), pg_combinebackup (PG 17+)
-- pg_probackup: FULL, PAGE, DELTA, PTRACK backup types, all statuses
-- Backup listing with filtering, sorting, grouping by directory
-- Detailed backup info: timing, storage, PostgreSQL metadata (LSN, timeline, WAL)
-- Backup validation with 4 levels (basic → standard → checksums → full):
-  - Level 1 (basic): on-disk structure check (required files and directories present)
-  - Level 2 (standard): metadata consistency — timestamps, LSN range, timeline, version
-  - Level 3 (checksums): file-level CRC32C + WAL availability + continuity + restore chain + timeline history + WAL header validation
+- **Three adapters**: pg_basebackup, pg_probackup 2.5/2.8, pgBackRest
+- **Backup listing** with filtering by tool/status, sorting, grouping by directory
+- **Detailed backup info**: timing, storage, PostgreSQL metadata (LSN, timeline, WAL)
+- **Backup validation** with 4 levels (basic → standard → checksums → full):
+  - Level 1 (basic): on-disk structure — required files and directories, backup chain integrity
+  - Level 2 (standard): metadata consistency — timestamps, LSN range, timeline, pg version
+  - Level 3 (checksums): per-file checksums + WAL availability, continuity, restore chain, header validation
   - Level 4 (full): archive-wide WAL header scan (detects segment swaps outside backup LSN ranges)
-- WAL segment size auto-detected from segment headers (supports non-default sizes from 1 MB to 1 GB)
-- STREAM backup WAL validation: embedded `database/pg_wal/` scanned automatically when no `--wal-archive` is given
-- Color output with `--no-color` option
+- **Per-tool structure checks**:
+  - pg_basebackup: `base/`, `global/pg_control`, `PG_VERSION`, `backup_label`/`backup_manifest`, stream WAL
+  - pg_probackup: `database/`, `database_map`, `pg_control`, `PG_VERSION`, `backup_label` (archive mode), stream WAL
+  - pgBackRest: `backup.manifest`, `backup-error` detection, `pg_data/pg_control`, `PG_VERSION`, `manifest.copy`
+- **Per-file checksum validation**:
+  - pg_basebackup: SHA256 and CRC32C from `backup_manifest` + manifest self-checksum
+  - pg_probackup: CRC32C from `backup_content.control`
+  - pgBackRest: SHA1 from `backup.manifest` `[target:file]` section
+- **Chain validation**: pg_probackup (FULL/DELTA/PAGE/PTRACK) and pgBackRest (FULL/DIFF/INCR)
+- **STREAM backup WAL**: embedded `database/pg_wal/` and `pg_wal/` scanned automatically
+- **WAL segment size** auto-detected from segment headers (1 MB – 1 GB)
+- Color output with `--no-color`
 
 ## Quick Start
 
@@ -31,9 +34,9 @@ Cross-platform PostgreSQL backup auditor - unified analysis and validation tool 
 - macOS, Linux, or FreeBSD
 
 **Optional:**
-- PostgreSQL 10+ headers (for extended PostgreSQL integration)
-- Meson >= 0.55.0 and Ninja (for Meson build system)
-- zlib (for compressed backup support)
+- PostgreSQL headers (`pg_config` in PATH)
+- Meson >= 0.55.0 + Ninja (alternative build system)
+- zlib (compressed backup support)
 
 ### Build
 
@@ -42,259 +45,147 @@ Cross-platform PostgreSQL backup auditor - unified analysis and validation tool 
 make
 ```
 
-**Meson (recommended):**
+**Meson:**
 ```bash
 meson setup builddir
 meson compile -C builddir
 ```
 
-See [Meson Build Guide](docs/MESON_BUILD.md) for detailed instructions.
-
 ### Install
 
-**Makefile:**
 ```bash
 sudo make install PREFIX=/usr/local
-```
-
-**Meson:**
-```bash
+# or
 sudo meson install -C builddir
 ```
 
 ### Usage
 
 ```bash
-# List all backups in a directory
+# List all backups
 pg_backup_auditor list --backup-dir=/var/lib/pgbackup
 
-# List with filtering and sorting (newest first, only OK pg_probackup)
+# Filter and sort
 pg_backup_auditor list -B /var/lib/pgbackup \
   --type=pg_probackup --status=ok --sort-by=start_time --reverse
 
-# Limit output and control scanning depth
-pg_backup_auditor list -B /var/lib/pgbackup --limit=10 --max-depth=2
+# Show detailed backup info
+pg_backup_auditor info --backup-dir=/var/lib/pgbackup --backup-id=20240101-120000F
+pg_backup_auditor info --backup-path=/var/lib/pgbackup/main/20240101-120000F
 
-# Show detailed backup information
-pg_backup_auditor info --backup-dir=/var/lib/pgbackup --backup-id=T92Y4K
-pg_backup_auditor info --backup-path=/var/lib/pgbackup/instance/T92Y4K
-
-# Validate backups (standard level by default)
+# Validate (standard level by default)
 pg_backup_auditor check --backup-dir=/var/lib/pgbackup
-pg_backup_auditor check -B /var/lib/pgbackup --level=full
 
-# Disable color output
-pg_backup_auditor list -B /var/lib/pgbackup --no-color
+# Full validation with WAL archive
+pg_backup_auditor check -B /var/lib/pgbackup --wal-archive=/var/lib/wal --level=full
+
+# Validate single backup
+pg_backup_auditor check -B /var/lib/pgbackup --backup-id=20240101-120000F --level=checksums
 ```
 
 ## Commands
 
 ### `list`
 
-Display all found backups with detailed information including total size.
+Display all found backups with timing, storage, and PostgreSQL metadata.
 
-```bash
+```
 pg_backup_auditor list --backup-dir=PATH [OPTIONS]
 ```
 
-Options:
-- `--backup-dir=PATH` - Backup directory (required)
-- `--type=TYPE` - Filter by type (auto|pg_basebackup|pg_probackup)
-- `--status=STATUS` - Filter by status (all|ok|warning|error|corrupt|orphan)
-- `--sort-by=FIELD` - Sort by field (start_time|end_time|name|size)
-- `--reverse, -r` - Reverse sort order (newest first)
-- `--limit=N, -n N` - Limit output to N backups
-- `--max-depth=N, -d N` - Maximum recursion depth (-1 = unlimited, 0 = current dir only)
-- `--help, -h` - Show comprehensive help
-
-**Output**: backups grouped by directory, instance names shown for pg_probackup, summary with total count and total size.
+| Option | Description |
+|--------|-------------|
+| `--backup-dir=PATH, -B PATH` | Backup directory (required) |
+| `--type=TYPE` | Filter: `auto`, `pg_basebackup`, `pg_probackup`, `pgbackrest` |
+| `--status=STATUS` | Filter: `all`, `ok`, `warning`, `error`, `corrupt`, `orphan` |
+| `--sort-by=FIELD` | Sort: `start_time` (default), `end_time`, `name`, `size` |
+| `--reverse, -r` | Reverse sort order |
+| `--limit=N, -n N` | Limit total output to N backups |
+| `--max-depth=N, -d N` | Recursion depth (-1 = unlimited) |
 
 ### `check`
 
-Validate backup consistency. Scans all backups in the directory and runs validation at the specified level. Backups with status ERROR or CORRUPT are skipped automatically.
+Validate backup consistency and WAL availability.
 
-```bash
+```
 pg_backup_auditor check --backup-dir=PATH [OPTIONS]
 ```
 
-Options:
-- `--backup-dir=PATH, -B PATH` - Backup directory (required)
-- `--backup-id=ID, -i ID` - Validate only the specified backup
-- `--wal-archive=PATH, -w PATH` - External WAL archive directory (optional, needed for level 3)
-- `--level=LEVEL, -l LEVEL` - Validation level (default: standard)
-- `--skip-wal` - Skip all WAL checks
-- `--help, -h` - Show help
+| Option | Description |
+|--------|-------------|
+| `--backup-dir=PATH, -B PATH` | Backup directory (required) |
+| `--backup-id=ID, -i ID` | Validate only specified backup |
+| `--wal-archive=PATH, -w PATH` | External WAL archive (for level 3+) |
+| `--level=LEVEL, -l LEVEL` | Validation level (default: `standard`) |
+| `--skip-wal` | Skip all WAL checks |
 
-**Validation levels** (cumulative — each level includes all checks from previous levels):
+**Validation levels** (cumulative):
 
 | Level | Name | Checks |
 |-------|------|--------|
-| 1 | `basic` | On-disk structure (required files/dirs present), backup chain *(chain: TODO)* |
-| 2 | `standard` | Metadata: timestamps, LSN range, timeline, PostgreSQL version *(default)* |
-| 3 | `checksums` | File-level CRC32C + WAL availability, continuity, restore chain, timeline history, header validation |
+| 1 | `basic` | On-disk structure, backup chain integrity |
+| 2 | `standard` | Timestamps, LSN range, timeline, pg version *(default)* |
+| 3 | `checksums` | Per-file checksums, WAL availability, continuity, restore chain, header validation |
 | 4 | `full` | All previous + archive-wide WAL header scan |
-
-**Level 1 structure checks** (pg_probackup):
-- `database/` directory present
-- `database/database_map` — OID→dbname map (always written by pg_probackup)
-- `database/global/pg_control` — required for all backup types
-- `database/backup_label` — required for archive-mode backups (`stream=false`)
-- Warnings: `database/PG_VERSION` missing, `backup_content.control` missing, `database/pg_wal/` missing for stream backups
-
-**Level 3 WAL checks** (require `--wal-archive` or auto-detected):
-- For pg_probackup **archive mode**: WAL path auto-detected via adapter
-- For pg_probackup **stream mode**: `database/pg_wal/` inside the backup directory scanned automatically
-- WAL availability: every segment in [start_lsn, stop_lsn] exists
-- WAL continuity: no gaps between consecutive segments
-- WAL restore chain: archive covers all inter-backup bridges (stop_lsn → next start_lsn)
-- WAL timeline history: `.history` file present for timeline > 1
-- WAL header validation per backup: reads `XLogLongPageHeaderData` (40 bytes) and verifies magic, `XLP_LONG_HEADER` flag, timeline, page address, segment size, block size, first-record CRC32C
-- WAL per-record CRC32C: validates every complete single-page `XLogRecord`; multi-page and `xl_crc=0` records are intentionally skipped
-- WAL segment size: auto-detected from `xlp_seg_size` in the segment header (supports 1 MB – 1 GB)
-
-**Level 4 additional checks**:
-- Archive-wide WAL header scan: verifies `xlp_pageaddr` for every segment in the archive, detects segment swaps outside backup LSN ranges
-
-**Output**: per-backup results with [OK] / [WARNING] / [ERROR] labels, summary with Total / Validated / Skipped counts, and overall result (OK / WARNING / FAILED).
-
-#### Planned: map file content validation (pg_probackup)
-
-The following checks are not yet implemented but are on the roadmap:
-
-**`tablespace_map`** (present only when non-default tablespaces exist; format: `<OID> <path>\n`):
-- Parse all entries and verify OIDs are valid integers
-- Verify that `database/pg_tblspc/<OID>/` subdirectory exists inside the backup
-- Detect duplicate OIDs
-
-**`database_map`** (always present; JSON array of `{"dbOid": N, "dbName": "..."}` objects):
-- Parse JSON and validate structure
-- Verify that `database/base/<OID>/` subdirectory exists for each entry (FULL backups)
-- Detect duplicate dbOid values
 
 ### `info`
 
 Show detailed information about a specific backup.
 
-```bash
-# By backup ID (searches in backup directory)
-pg_backup_auditor info --backup-dir=PATH --backup-id=BACKUP_ID
-
-# By direct path
-pg_backup_auditor info --backup-path=PATH
 ```
-
-Options:
-- `--backup-dir=PATH, -B PATH` - Backup directory for searching by ID
-- `--backup-id=ID, -i ID` - Backup ID to search for
-- `--backup-path=PATH, -p PATH` - Direct path to backup directory
-- `--help, -h` - Show help
-
-Either `--backup-path` or (`--backup-dir` + `--backup-id`) is required.
-
-**Output sections**:
-- GENERAL — ID, node, instance, type, tool, tool version, status
-- TIMING — start time, end time, duration
-- STORAGE — path, data size, WAL size
-- POSTGRESQL — version, timeline, start/stop LSN, WAL range, WAL start file, backup method, backup from, label
+pg_backup_auditor info --backup-path=PATH
+pg_backup_auditor info --backup-dir=PATH --backup-id=ID
+```
 
 ## Exit Codes
 
-- `0` - Success
-- `1` - General error
-- `2` - Validation failed (check command)
-- `3` - Critical error / No backups found
-- `4` - Invalid arguments
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error |
+| 2 | Validation failed |
+| 3 | Critical error / no backups found |
+| 4 | Invalid arguments |
 
 ## Supported Platforms
 
-### Tier 1 (Primary)
-- macOS 12+ (Intel and Apple Silicon)
-- Ubuntu 20.04+, 22.04+, 24.04+
-- Debian 11, 12
-- RHEL/Rocky/AlmaLinux 8, 9
+**Tier 1:** macOS 12+ (Intel/Apple Silicon), Ubuntu 20.04/22.04/24.04, Debian 11/12, RHEL/Rocky/AlmaLinux 8/9
 
-### Tier 2 (Best effort)
-- FreeBSD 13.x, 14.x
-- Arch Linux, openSUSE, Alpine
+**Tier 2:** FreeBSD 13/14, Arch Linux, openSUSE, Alpine
+
+## Known Limitations
+
+- **pgBackRest WAL**: pgBackRest stores WAL in subdirectories with hash-suffixed compressed filenames — this format cannot be scanned by the WAL validator. WAL checks are skipped for pgBackRest backups; a note is shown in output.
+- **pg_basebackup tar format**: per-file checksums inside tar archives require unpacking and are not verified. The manifest self-checksum is still validated.
+- **pgBackRest compressed backups**: per-file checksums require decompression and are not verified for compressed (`pg_data.gz` etc.) backups.
+- **`tool_version`**: the version of the backup tool is not populated (pgBackRest does not expose it in the manifest).
+- **pg_basebackup incremental (PG17+)**: incremental backups created with `pg_basebackup --incremental` are detected but chain validation is not yet implemented.
 
 ## Testing
 
-### Run Unit Tests
-
-**Meson:**
 ```bash
+# Makefile
+make test
+
+# Meson
 meson test -C builddir
 ```
 
-**Makefile:**
-```bash
-cd tests/unit
-make run
-```
+**217 unit tests, 100% passing.**
 
-### Test Coverage
-
-**Test suite**: 166 unit and integration tests (100% passing)
-
-- **WAL validator**: availability, continuity, restore chain, archive-wide headers, timeline history, per-backup header validation, per-record CRC32C, WAL segment size auto-detection (1 MB segments), stream backup embedded WAL
-- **Backup validator**: file-level CRC32C checksums, metadata consistency, backup structure (archive mode / stream mode / missing files / missing dirs)
-- **Adapters**: pg_basebackup, pg_probackup (scan, WAL path detection, end-to-end)
-- **Common utilities**: string_utils, xlog (LSN/segment parsing and formatting), INI parser
-- **Integration tests** with synthetic pg_probackup backup catalog (auto-generated; skipped if env vars not set)
-
-## Development
-
-### Debug Build
-
-**Makefile:**
-```bash
-make DEBUG=1
-```
-
-**Meson:**
-```bash
-meson setup builddir --buildtype=debug
-meson compile -C builddir
-```
-
-### Clean Build
-
-**Makefile:**
-```bash
-make clean
-make
-```
-
-**Meson:**
-```bash
-rm -rf builddir
-meson setup builddir
-meson compile -C builddir
-```
-
-### Dependencies
-
-**Makefile:**
-```bash
-make depend
-```
-
-**Meson:**
-```bash
-# Dependencies are handled automatically
-meson setup builddir --reconfigure
-```
+Test suite covers: WAL validator (availability, continuity, restore chain, headers, CRC32C, segment size, stream WAL), backup validator (structure, metadata, checksums for all three tools, chain validation), adapters (pg_basebackup, pg_probackup, pgBackRest — scan, metadata, WAL path), common utilities (string_utils, xlog, INI parser, fs_scanner).
 
 ## Documentation
 
-- [Installation Guide](docs/INSTALL.md) - Platform-specific installation
-- [Meson Build Guide](docs/MESON_BUILD.md) - Detailed Meson instructions
+- [Installation Guide](docs/INSTALL.md)
+- [Developer Guide](docs/DEVELOPER.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Meson Build Guide](docs/MESON_BUILD.md)
 
 ## License
 
-GNU General Public License v3 or later (GPL-3.0-or-later). See [LICENSE](LICENSE).
+GNU General Public License v3 or later (GPL-3.0-or-later).
 
-## Authors
+## Author
 
-- Daria Lepikhova daria.n.lepikhova@gmail.com
-
+Daria Lepikhova <daria.n.lepikhova@gmail.com>

@@ -94,19 +94,17 @@ Meson automatically detects and enables optional features:
 
 - **PostgreSQL** (`pg_config`): Required for PostgreSQL headers
 - **zlib**: Compressed backup support
-- **json-c**: JSON output format
-- **yaml**: YAML output format
 
 ### Installing Dependencies
 
 **macOS**:
 ```bash
-brew install postgresql zlib json-c libyaml
+brew install postgresql zlib
 ```
 
 **Ubuntu/Debian**:
 ```bash
-sudo apt install postgresql-server-dev-all zlib1g-dev libjson-c-dev libyaml-dev
+sudo apt install postgresql-server-dev-all zlib1g-dev
 ```
 
 ## Build Targets
@@ -283,7 +281,7 @@ meson setup builddir --reconfigure
 
 ```bash
 # Install missing dependencies
-brew install zlib json-c libyaml  # macOS
+brew install zlib  # macOS
 
 # Or disable optional features by not installing them
 # Meson will automatically skip unavailable dependencies
