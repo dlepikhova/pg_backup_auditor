@@ -757,8 +757,6 @@ output_backups(const BackupInfo *backups, const ListOptions *opts)
  * 4. Output filtered and limited backup list as a table (output_backups)
  * 5. Display summary statistics (backup count and total size)
  *
- * Note: JSON/YAML output formats fall back to table format (not yet implemented).
- *
  * Returns:
  * - EXIT_SUCCESS (0) on successful execution
  * - EXIT_FAILURE (1) on error (directory not found, no backups)
