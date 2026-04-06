@@ -4,9 +4,9 @@
 
 ### All Platforms
 
-- PostgreSQL 10+ development headers
-- C11-compatible compiler
+- C11-compatible compiler (GCC 7+ or Clang 10+)
 - Make
+- PostgreSQL development headers (optional — for `pg_config` detection)
 
 ### macOS
 
@@ -15,30 +15,38 @@
 xcode-select --install
 
 # Install PostgreSQL (choose one)
-# Via Homebrew:
-brew install postgresql@16
+brew install postgresql@17
 
-# Via Postgres.app:
-# Download from https://postgresapp.com/
+# For running tests (optional)
+brew install check
 ```
 
 ### Ubuntu/Debian
 
 ```bash
 sudo apt update
-sudo apt install build-essential postgresql-server-dev-16
+sudo apt install build-essential postgresql-server-dev-17
+
+# For running tests (optional)
+sudo apt install check
 ```
 
 ### RHEL/Rocky/AlmaLinux
 
 ```bash
-sudo dnf install gcc make postgresql16-devel
+sudo dnf install gcc make postgresql17-devel
+
+# For running tests (optional)
+sudo dnf install check check-devel
 ```
 
 ### FreeBSD
 
 ```bash
-sudo pkg install postgresql16-client gmake
+sudo pkg install postgresql17-client gmake
+
+# For running tests (optional)
+sudo pkg install check
 ```
 
 ## Building from Source
@@ -113,6 +121,24 @@ Ensure you're using Clang:
 
 ```bash
 make CC=clang
+```
+
+### `check.h` not found (unit tests)
+
+libcheck is required for `make test`. Install it:
+
+```bash
+# Ubuntu/Debian
+sudo apt install check
+
+# macOS
+brew install check
+
+# RHEL/Rocky/AlmaLinux
+sudo dnf install check check-devel
+
+# FreeBSD
+sudo pkg install check
 ```
 
 ### Missing PostgreSQL headers

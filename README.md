@@ -37,6 +37,7 @@ Cross-platform PostgreSQL backup auditor — unified analysis and validation too
 - PostgreSQL headers (`pg_config` in PATH)
 - Meson >= 0.55.0 + Ninja (alternative build system)
 - zlib (compressed backup support)
+- libcheck (`apt install check` / `brew install check`) — required for `make test`
 
 ### Build
 
@@ -183,8 +184,6 @@ Test suite covers: WAL validator (availability, continuity, restore chain, heade
 ## Documentation
 
 - [Installation Guide](docs/INSTALL.md)
-- [Developer Guide](docs/DEVELOPER.md)
-- [Architecture](docs/ARCHITECTURE.md)
 - [Meson Build Guide](docs/MESON_BUILD.md)
 
 ## License
