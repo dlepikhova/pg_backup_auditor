@@ -4,7 +4,7 @@ Cross-platform PostgreSQL backup auditor — unified analysis and validation too
 
 ## Features
 
-- **Three adapters**: pg_basebackup, pg_probackup 2.5/2.8, pgBackRest
+- **Three adapters**: pg_basebackup, pg_probackup 2.5, pgBackRest
 - **Backup listing** with filtering by tool/status, sorting, grouping by directory
 - **Detailed backup info**: timing, storage, PostgreSQL metadata (LSN, timeline, WAL)
 - **Backup validation** with 4 levels (basic → standard → checksums → full):
@@ -13,8 +13,8 @@ Cross-platform PostgreSQL backup auditor — unified analysis and validation too
   - Level 3 (checksums): per-file checksums + WAL availability, continuity, restore chain, header validation
   - Level 4 (full): archive-wide WAL header scan (detects segment swaps outside backup LSN ranges)
 - **Per-tool structure checks**:
-  - pg_basebackup: `base/`, `global/pg_control`, `PG_VERSION`, `backup_label`/`backup_manifest`, stream WAL
-  - pg_probackup: `database/`, `database_map`, `pg_control`, `PG_VERSION`, `backup_label` (archive mode), stream WAL
+  - pg_basebackup: `base/`, `global/pg_control`, `PG_VERSION`, `backup_label`/`backup_manifest`; `pg_wal/` or `pg_wal.tar*` (stream mode)
+  - pg_probackup: `database/`, `database/database_map`, `database/global/pg_control`, `database/PG_VERSION` (FULL only), `database/backup_label` (archive mode), `database/pg_wal/` (stream mode)
   - pgBackRest: `backup.manifest`, `backup-error` detection, `pg_data/pg_control`, `PG_VERSION`, `manifest.copy`
 - **Per-file checksum validation**:
   - pg_basebackup: SHA256 and CRC32C from `backup_manifest` + manifest self-checksum
@@ -97,11 +97,12 @@ pg_backup_auditor list --backup-dir=PATH [OPTIONS]
 |--------|-------------|
 | `--backup-dir=PATH, -B PATH` | Backup directory (required) |
 | `--type=TYPE` | Filter: `auto`, `pg_basebackup`, `pg_probackup`, `pgbackrest` |
-| `--status=STATUS` | Filter: `all`, `ok`, `warning`, `error`, `corrupt`, `orphan` |
+| `--status=STATUS` | Filter: `all`, `ok`, `warning`, `error`, `corrupt`, `orphan`, `running` |
 | `--sort-by=FIELD` | Sort: `start_time` (default), `end_time`, `name`, `size` |
 | `--reverse, -r` | Reverse sort order |
 | `--limit=N, -n N` | Limit total output to N backups |
 | `--max-depth=N, -d N` | Recursion depth (-1 = unlimited) |
+| `--format=FORMAT, -f FORMAT` | Output format: `table` (only `table` is currently supported) |
 
 ### `check`
 
@@ -160,6 +161,10 @@ pg_backup_auditor info --backup-dir=PATH --backup-id=ID
 - **pgBackRest compressed backups**: per-file checksums require decompression and are not verified for compressed (`pg_data.gz` etc.) backups.
 - **`tool_version`**: the version of the backup tool is not populated (pgBackRest does not expose it in the manifest).
 - **pg_basebackup incremental (PG17+)**: incremental backups created with `pg_basebackup --incremental` are detected but chain validation is not yet implemented.
+- **pg_combinebackup (PG17+)**: backups produced by `pg_combinebackup` have `backup_manifest` but no `backup_label`. Metadata parsing from `backup_manifest` is not yet implemented; these backups are listed with status ERROR.
+- **`node_name`**: always reported as `localhost` for pg_basebackup backups. Extraction from the backup directory name or connection metadata is not yet implemented.
+- **pg_probackup custom WAL location**: if `pg_probackup.conf` specifies a non-default WAL archive path, it is ignored. WAL validation always looks in the default location relative to the catalog.
+- **pg_probackup tablespace and database map**: entries in `tablespace_map` and `database_map` are not verified against the actual backup file tree.
 
 ## Testing
 
