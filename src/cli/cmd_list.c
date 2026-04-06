@@ -209,6 +209,32 @@ validate_options(const ListOptions *opts)
 		return EXIT_INVALID_ARGUMENTS;
 	}
 
+	/* Validate status filter */
+	if (strcasecmp(opts->status_filter, "all")     != 0 &&
+		strcasecmp(opts->status_filter, "ok")      != 0 &&
+		strcasecmp(opts->status_filter, "warning") != 0 &&
+		strcasecmp(opts->status_filter, "error")   != 0 &&
+		strcasecmp(opts->status_filter, "corrupt") != 0 &&
+		strcasecmp(opts->status_filter, "orphan")  != 0 &&
+		strcasecmp(opts->status_filter, "running") != 0)
+	{
+		fprintf(stderr, "Error: Invalid status filter: %s\n", opts->status_filter);
+		fprintf(stderr, "Valid values: all, ok, warning, error, corrupt, orphan, running\n");
+		return EXIT_INVALID_ARGUMENTS;
+	}
+
+	/* Validate sort_by */
+	if (strcasecmp(opts->sort_by, "time")       != 0 &&
+		strcasecmp(opts->sort_by, "start_time") != 0 &&
+		strcasecmp(opts->sort_by, "end_time")   != 0 &&
+		strcasecmp(opts->sort_by, "name")        != 0 &&
+		strcasecmp(opts->sort_by, "size")        != 0)
+	{
+		fprintf(stderr, "Error: Invalid sort field: %s\n", opts->sort_by);
+		fprintf(stderr, "Valid values: start_time, end_time, name, size\n");
+		return EXIT_INVALID_ARGUMENTS;
+	}
+
 	return EXIT_SUCCESS;
 }
 
@@ -250,6 +276,9 @@ matches_filters(const BackupInfo *backup, const ListOptions *opts)
 			return false;
 		if (strcasecmp(opts->status_filter, "orphan") == 0 &&
 			backup->status != BACKUP_STATUS_ORPHAN)
+			return false;
+		if (strcasecmp(opts->status_filter, "running") == 0 &&
+			backup->status != BACKUP_STATUS_RUNNING)
 			return false;
 	}
 
