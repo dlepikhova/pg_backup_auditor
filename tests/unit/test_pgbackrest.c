@@ -60,6 +60,9 @@ setup_pgbackrest_repo(void)
 	/* Create backup.info file with JSON backup entries */
 	snprintf(path, sizeof(path), "%s/backup.info", stanza_dir);
 	fp = fopen(path, "w");
+	fprintf(fp, "[backrest]\n");
+	fprintf(fp, "backrest-format=5\n");
+	fprintf(fp, "backrest-version=\"2.51\"\n\n");
 	fprintf(fp, "[backup:current]\n");
 	fprintf(fp, "20240108-100530F={\"backup-label\":\"20240108-100530F\",");
 	fprintf(fp, "\"backup-type\":\"full\",");
@@ -294,6 +297,21 @@ START_TEST(test_parse_pg_version)
 
 	/* Version should be parsed from manifest: 17 -> 170000 */
 	ck_assert_uint_eq(info->pg_version, 170000);
+
+	free_backup_list(info);
+	teardown_pgbackrest_repo();
+}
+END_TEST
+
+/* Test: tool_version parsed from [backrest] section of backup.info */
+START_TEST(test_parse_tool_version)
+{
+	setup_pgbackrest_repo();
+
+	BackupInfo *info = pgbackrest_adapter.scan(repo_dir);
+
+	ck_assert_ptr_nonnull(info);
+	ck_assert_str_eq(info->tool_version, "2.51");
 
 	free_backup_list(info);
 	teardown_pgbackrest_repo();
@@ -1012,6 +1030,7 @@ pgbackrest_suite(void)
 	tcase_add_test(tc_metadata, test_parse_lsn_values);
 	tcase_add_test(tc_metadata, test_parse_timestamps);
 	tcase_add_test(tc_metadata, test_parse_pg_version);
+	tcase_add_test(tc_metadata, test_parse_tool_version);
 	tcase_add_test(tc_metadata, test_backup_type_parsing);
 	suite_add_tcase(s, tc_metadata);
 

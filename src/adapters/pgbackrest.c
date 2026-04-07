@@ -215,6 +215,23 @@ parse_pgbackrest_backup_info(const char *backup_info_path, const char *stanza_na
 	if (ini == NULL)
 		return NULL;
 
+	/* Read pgBackRest version from [backrest] section */
+	char backrest_version[64] = "";
+	const char *ver = ini_get_value(ini, "backrest", "backrest-version");
+	if (ver != NULL)
+	{
+		/* Value may be quoted: "2.51" — strip quotes */
+		if (ver[0] == '"')
+		{
+			strncpy(backrest_version, ver + 1, sizeof(backrest_version) - 1);
+			char *end = strchr(backrest_version, '"');
+			if (end != NULL)
+				*end = '\0';
+		}
+		else
+			strncpy(backrest_version, ver, sizeof(backrest_version) - 1);
+	}
+
 	/* Get [backup:current] section which contains all backups */
 	section = ini_get_section(ini, "backup:current");
 	if (section == NULL)
@@ -241,6 +258,11 @@ parse_pgbackrest_backup_info(const char *backup_info_path, const char *stanza_na
 		/* Set tool type */
 		info->tool = BACKUP_TOOL_PGBACKREST;
 		info->status = BACKUP_STATUS_OK;
+
+		/* Set tool version from [backrest] section */
+		if (backrest_version[0] != '\0')
+			strncpy(info->tool_version, backrest_version,
+					sizeof(info->tool_version) - 1);
 
 		/* Parse JSON value for backup metadata */
 		json_value = kv->value;
