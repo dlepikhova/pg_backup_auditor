@@ -15,12 +15,15 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04, macos-14]
-        pg_version: [14, 15, 16, 17]
+        pg_version: [14, 15, 16, 17, 18]
         compiler: [gcc, clang]
         exclude:
           # macOS doesn't have gcc in CI, only clang
           - os: macos-14
             compiler: gcc
+          # PG18 not yet available in Homebrew
+          - os: macos-14
+            pg_version: 18
 
     steps:
       - name: Checkout code
