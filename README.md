@@ -155,6 +155,12 @@ pg_backup_auditor info --backup-dir=PATH --backup-id=ID
 
 **Tier 2:** FreeBSD 13/14, Arch Linux, openSUSE, Alpine
 
+## Supported PostgreSQL Versions
+
+PostgreSQL **14, 15, 16, 17, 18** — tested in CI on every commit.
+
+pg_basebackup and pg_probackup adapters work with the PostgreSQL version that created the backup, regardless of the version installed on the auditing host. pgBackRest backups are version-independent at the metadata level.
+
 ## Known Limitations
 
 - **pgBackRest WAL**: pgBackRest stores WAL in subdirectories with hash-suffixed compressed filenames — this format cannot be scanned by the WAL validator. WAL checks are skipped for pgBackRest backups; a note is shown in output.
@@ -177,7 +183,9 @@ make test
 meson test -C builddir
 ```
 
-**217 unit tests, 100% passing.**
+**218 unit tests, 100% passing.**
+
+CI matrix: Ubuntu 22.04/24.04 + macOS 14, PostgreSQL 14–18 (PG18 Linux only), GCC and Clang.
 
 Test suite covers: WAL validator (availability, continuity, restore chain, headers, CRC32C, segment size, stream WAL), backup validator (structure, metadata, checksums for all three tools, chain validation), adapters (pg_basebackup, pg_probackup, pgBackRest — scan, metadata, WAL path), common utilities (string_utils, xlog, INI parser, fs_scanner).
 
