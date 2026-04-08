@@ -463,10 +463,10 @@ get_status_color(BackupStatus status)
 static void
 print_table_header(void)
 {
-	printf("%-20s %-16s %-12s %-16s %-8s %-19s %-19s %-10s %-10s\n",
-		   "BACKUP ID", "NODE", "TYPE", "TOOL", "STATUS", "START TIME", "END TIME", "SIZE", "WAL SIZE");
-	printf("%-20s %-16s %-12s %-16s %-8s %-19s %-19s %-10s %-10s\n",
-		   "--------------------", "----------------", "------------", "----------------", "--------",
+	printf("%-20s %-16s %-12s %-16s %-4s %-8s %-19s %-19s %-10s %-10s\n",
+		   "BACKUP ID", "NODE", "TYPE", "TOOL", "PG", "STATUS", "START TIME", "END TIME", "SIZE", "WAL SIZE");
+	printf("%-20s %-16s %-12s %-16s %-4s %-8s %-19s %-19s %-10s %-10s\n",
+		   "--------------------", "----------------", "------------", "----------------", "----", "--------",
 		   "-------------------", "-------------------", "----------", "----------");
 }
 
@@ -515,11 +515,18 @@ print_backup_table_row(const BackupInfo *backup)
 	else
 		snprintf(wal_size_str, sizeof(wal_size_str), "-");
 
-	printf("%-20s %-16s %-12s %-16s %s%-8s%s %-19s %-19s %-10s %-10s\n",
+	char pg_ver_str[8];
+	if (backup->pg_version > 0)
+		snprintf(pg_ver_str, sizeof(pg_ver_str), "%d", backup->pg_version / 10000);
+	else
+		snprintf(pg_ver_str, sizeof(pg_ver_str), "-");
+
+	printf("%-20s %-16s %-12s %-16s %-4s %s%-8s%s %-19s %-19s %-10s %-10s\n",
 		   backup->backup_id,
 		   backup->node_name[0] ? backup->node_name : "localhost",
 		   backup_type_to_string(backup->type),
 		   backup_tool_to_string(backup->tool),
+		   pg_ver_str,
 		   get_status_color(backup->status),
 		   backup_status_to_string(backup->status),
 		   use_color ? COLOR_RESET : "",
