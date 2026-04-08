@@ -117,7 +117,7 @@ scan_directory_recursive(const char *dir_path, BackupInfo **backup_list, int dep
 			continue;
 
 		/* Build full path */
-		snprintf(path, sizeof(path), "%s/%s", dir_path, entry->d_name);
+		path_join(path, sizeof(path), dir_path, entry->d_name);
 
 		/* Check if it's a directory */
 		if (stat(path, &statbuf) != 0)
