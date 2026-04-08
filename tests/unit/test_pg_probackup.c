@@ -213,6 +213,72 @@ START_TEST(test_parse_status_orphan)
 }
 END_TEST
 
+/* from-replica=true → backup_from="standby" */
+START_TEST(test_parse_from_replica_standby)
+{
+	char tmp[64];
+	char db_dir[PATH_MAX];
+	char ctl_path[PATH_MAX];
+
+	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_replica_%d", (int)getpid());
+	snprintf(db_dir,  sizeof(db_dir),  "%s/database", tmp);
+	snprintf(ctl_path, sizeof(ctl_path), "%s/backup.control", tmp);
+
+	mkdir(tmp, 0755);
+	mkdir(db_dir, 0755);
+
+	FILE *f = fopen(ctl_path, "w");
+	ck_assert_ptr_nonnull(f);
+	fprintf(f, "backup-id = TSTDEF\n");
+	fprintf(f, "backup-mode = FULL\n");
+	fprintf(f, "status = OK\n");
+	fprintf(f, "from-replica = true\n");
+	fprintf(f, "compress-alg = zlib\n");
+	fclose(f);
+
+	BackupInfo *b = pg_probackup_adapter.scan(tmp);
+	rm_rf(tmp);
+
+	ck_assert_ptr_nonnull(b);
+	ck_assert_str_eq(b->backup_from, "standby");
+	ck_assert_str_eq(b->compress_alg, "zlib");
+	free_backup_list(b);
+}
+END_TEST
+
+/* from-replica=false → backup_from="primary"; compress-alg=none → compress_alg="" */
+START_TEST(test_parse_from_replica_primary)
+{
+	char tmp[64];
+	char db_dir[PATH_MAX];
+	char ctl_path[PATH_MAX];
+
+	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_primary_%d", (int)getpid());
+	snprintf(db_dir,  sizeof(db_dir),  "%s/database", tmp);
+	snprintf(ctl_path, sizeof(ctl_path), "%s/backup.control", tmp);
+
+	mkdir(tmp, 0755);
+	mkdir(db_dir, 0755);
+
+	FILE *f = fopen(ctl_path, "w");
+	ck_assert_ptr_nonnull(f);
+	fprintf(f, "backup-id = TSTGHI\n");
+	fprintf(f, "backup-mode = FULL\n");
+	fprintf(f, "status = OK\n");
+	fprintf(f, "from-replica = false\n");
+	fprintf(f, "compress-alg = none\n");
+	fclose(f);
+
+	BackupInfo *b = pg_probackup_adapter.scan(tmp);
+	rm_rf(tmp);
+
+	ck_assert_ptr_nonnull(b);
+	ck_assert_str_eq(b->backup_from, "primary");
+	ck_assert_str_eq(b->compress_alg, "");  /* "none" is suppressed */
+	free_backup_list(b);
+}
+END_TEST
+
 /* ------------------------------------------------------------------ *
  * Integration: real backup
  * ------------------------------------------------------------------ */
@@ -267,6 +333,8 @@ pg_probackup_suite(void)
 	tcase_add_test(tc_parse, test_parse_mode_page);
 	tcase_add_test(tc_parse, test_parse_mode_ptrack);
 	tcase_add_test(tc_parse, test_parse_status_orphan);
+	tcase_add_test(tc_parse, test_parse_from_replica_standby);
+	tcase_add_test(tc_parse, test_parse_from_replica_primary);
 	suite_add_tcase(s, tc_parse);
 
 	TCase *tc_int = tcase_create("Integration");

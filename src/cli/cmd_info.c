@@ -185,6 +185,8 @@ print_backup_info(const BackupInfo *backup)
 	if (backup->instance_name[0] != '\0')
 		printf("  Instance:        %s\n", backup->instance_name);
 	printf("  Type:            %s\n", backup_type_to_string(backup->type));
+	if (backup->backup_from[0] != '\0')
+		printf("  Backup From:     %s\n", backup->backup_from);
 	printf("  Tool:            %s\n", backup_tool_to_string(backup->tool));
 	if (backup->tool_version[0] != '\0')
 		printf("  Tool Version:    %s\n", backup->tool_version);
@@ -192,6 +194,8 @@ print_backup_info(const BackupInfo *backup)
 		   get_status_color(backup->status),
 		   backup_status_to_string(backup->status),
 		   use_color ? COLOR_RESET : "");
+	if (backup->parent_backup_id[0] != '\0')
+		printf("  Parent Backup:   %s\n", backup->parent_backup_id);
 	printf("\n");
 
 	/* Timing Information */
@@ -261,6 +265,8 @@ print_backup_info(const BackupInfo *backup)
 					 wal_mb, (double)backup->wal_bytes);
 		printf("  WAL Size:        %s\n", wal_size_str);
 	}
+	if (backup->compress_alg[0] != '\0')
+		printf("  Compression:     %s\n", backup->compress_alg);
 
 	printf("\n");
 
@@ -306,9 +312,6 @@ print_backup_info(const BackupInfo *backup)
 
 	if (backup->backup_method[0] != '\0')
 		printf("  Backup Method:   %s\n", backup->backup_method);
-
-	if (backup->backup_from[0] != '\0')
-		printf("  Backup From:     %s\n", backup->backup_from);
 
 	if (backup->backup_label[0] != '\0')
 		printf("  Label:           %s\n", backup->backup_label);

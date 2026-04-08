@@ -98,6 +98,7 @@ typedef struct BackupInfo {
 	char            backup_from[32];    /* "primary" or "standby" */
 	char            backup_label[128];  /* User-defined label */
 	char            wal_start_file[64]; /* WAL filename from START WAL LOCATION */
+	char            compress_alg[32];   /* Compression algorithm: none, gzip, zstd, lz4, etc. */
 	struct BackupInfo *next;
 } BackupInfo;
 

@@ -265,7 +265,8 @@ parse_control_line(const char *line, const char *key, char *value, size_t value_
  * - parent-backup-id = <timestamp>  (for incremental)
  * - data-bytes = <int>
  * - wal-bytes = <int>
- * - compress-alg = <string>
+ * - compress-alg = <string>  (none|zlib|pglz|lz4|zstd)
+ * - from-replica = <bool>   (true = standby, false = primary)
  * - postgres-version = <string>
  */
 static int
@@ -433,6 +434,26 @@ pg_probackup_read_metadata(const char *backup_path, BackupInfo *info)
 		if (value[0] != '\0')
 		{
 			info->wal_stream = (strcmp(value, "true") == 0);
+			value[0] = '\0';
+			continue;
+		}
+
+		/* Parse from-replica (true = standby, false = primary) */
+		parse_control_line(line, "from-replica", value, sizeof(value));
+		if (value[0] != '\0')
+		{
+			snprintf(info->backup_from, sizeof(info->backup_from), "%s",
+					 strcmp(value, "true") == 0 ? "standby" : "primary");
+			value[0] = '\0';
+			continue;
+		}
+
+		/* Parse compress-alg (skip "none" — means no compression) */
+		parse_control_line(line, "compress-alg", value, sizeof(value));
+		if (value[0] != '\0')
+		{
+			if (strcmp(value, "none") != 0)
+				snprintf(info->compress_alg, sizeof(info->compress_alg), "%s", value);
 			value[0] = '\0';
 			continue;
 		}

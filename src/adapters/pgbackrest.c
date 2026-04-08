@@ -181,6 +181,11 @@ parse_pgbackrest_manifest(BackupInfo *info, const char *manifest_path)
 		info->pg_version = major * 10000;
 	}
 
+	/* Compression algorithm */
+	value = ini_get_value(ini, "backup", "backup-compress-type");
+	if (value != NULL)
+		snprintf(info->compress_alg, sizeof(info->compress_alg), "%s", value);
+
 	/* backup-size: not always present in pgBackRest manifests.
 	 * Only overwrite if the field exists and is non-zero. */
 	value = ini_get_value(ini, "backup", "backup-size");
