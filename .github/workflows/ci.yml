@@ -51,12 +51,11 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
 
-          # Install PostgreSQL and dependencies
-          # --no-install-recommends avoids pulling in clang/llvm (700 MB)
-          # which postgresql-server-dev recommends for JIT but we don't need
+          # Install PostgreSQL and check
+          # postgresql-server-dev is omitted: our code uses no PG server headers,
+          # and on Ubuntu 24 it pulls in llvm/clang (~500 MB) as a hard dependency
           sudo apt-get install -y --no-install-recommends \
             postgresql-${{ matrix.pg_version }} \
-            postgresql-server-dev-${{ matrix.pg_version }} \
             check
 
       - name: Install valgrind (only for the leak-check job)
@@ -118,9 +117,8 @@ jobs:
           wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
           echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             postgresql-17 \
-            postgresql-server-dev-17 \
             check
 
       - name: Build
