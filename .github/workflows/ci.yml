@@ -52,7 +52,9 @@ jobs:
           sudo apt-get update
 
           # Install PostgreSQL and dependencies
-          sudo apt-get install -y \
+          # --no-install-recommends avoids pulling in clang/llvm (700 MB)
+          # which postgresql-server-dev recommends for JIT but we don't need
+          sudo apt-get install -y --no-install-recommends \
             postgresql-${{ matrix.pg_version }} \
             postgresql-server-dev-${{ matrix.pg_version }} \
             check
