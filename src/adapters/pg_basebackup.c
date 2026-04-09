@@ -577,11 +577,18 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 
 			info->timeline = (TimeLineID)atoi(value);
 		}
-		/* INCREMENTAL FROM LSN: 0/6000028 (PostgreSQL 17+) */
+		/* INCREMENTAL FROM LSN: 0/6000028 (PostgreSQL 17+)
+		 * This LSN equals the stop_lsn of the parent backup.
+		 * Stored in redo_lsn; fs_scanner uses it to set parent_backup_id. */
 		else if (strncmp(line, "INCREMENTAL FROM LSN:", 21) == 0)
 		{
 			is_incremental = true;
-			/* Note: We could also parse the parent LSN if needed in the future */
+			value = line + 21;
+			while (*value == ' ' || *value == '\t')
+				value++;
+			unsigned int hi, lo;
+			if (sscanf(value, "%X/%X", &hi, &lo) == 2)
+				info->redo_lsn = ((uint64_t)hi << 32) | lo;
 		}
 	}
 
@@ -602,6 +609,18 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 	{
 		info->type = BACKUP_TYPE_INCREMENTAL;
 		log_debug("Detected incremental backup (PostgreSQL 17+)");
+
+		/*
+		 * Append 'I' suffix to avoid backup_id collision when a FULL and an
+		 * INCREMENTAL backup happen to start within the same second (rare but
+		 * observed in practice with fast test setups).
+		 */
+		size_t id_len = strlen(info->backup_id);
+		if (id_len + 1 < sizeof(info->backup_id))
+		{
+			info->backup_id[id_len]     = 'I';
+			info->backup_id[id_len + 1] = '\0';
+		}
 	}
 
 	/*

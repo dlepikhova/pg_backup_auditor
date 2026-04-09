@@ -137,6 +137,49 @@ scan_directory_recursive(const char *dir_path, BackupInfo **backup_list, int dep
 }
 
 /*
+ * link_incremental_chains — post-scan pass for pg_basebackup 17+ incrementals.
+ *
+ * pg_basebackup does not store a parent backup ID; instead, backup_label
+ * contains "INCREMENTAL FROM LSN: X/X" which equals the stop_lsn of the
+ * parent.  The adapter stores this value in redo_lsn.  Here we match it
+ * against stop_lsn of other backups and populate parent_backup_id so that
+ * the tree display in cmd_list works uniformly across all tools.
+ */
+static void
+link_incremental_chains(BackupInfo *list)
+{
+	BackupInfo *incr;
+	BackupInfo *candidate;
+
+	for (incr = list; incr != NULL; incr = incr->next)
+	{
+		if (incr->type != BACKUP_TYPE_INCREMENTAL)
+			continue;
+		if (incr->parent_backup_id[0] != '\0')
+			continue;  /* already linked */
+		if (incr->redo_lsn == 0)
+			continue;
+
+		/* Find backup whose stop_lsn matches this incremental's redo_lsn */
+		for (candidate = list; candidate != NULL; candidate = candidate->next)
+		{
+			if (candidate == incr)
+				continue;
+			if (candidate->start_lsn == incr->redo_lsn)
+			{
+				snprintf(incr->parent_backup_id, sizeof(incr->parent_backup_id),
+						 "%s", candidate->backup_id);
+				log_debug("Linked incremental %s → parent %s (via LSN %lX/%X)",
+						  incr->backup_id, candidate->backup_id,
+						  (unsigned long)(incr->redo_lsn >> 32),
+						  (unsigned int)(incr->redo_lsn & 0xFFFFFFFF));
+				break;
+			}
+		}
+	}
+}
+
+/*
  * Scan directory recursively for backups
  * Can detect multiple backup types in the same directory
  *
@@ -155,6 +198,10 @@ scan_backup_directory(const char *backup_dir, int max_depth)
 
 	/* Recursively scan with specified max depth */
 	scan_directory_recursive(backup_dir, &backup_list, 0, max_depth);
+
+	/* Link pg_basebackup 17+ incrementals to their parents via LSN */
+	if (backup_list != NULL)
+		link_incremental_chains(backup_list);
 
 	return backup_list;
 }

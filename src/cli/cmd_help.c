@@ -50,16 +50,22 @@ print_list_usage(void)
 
 	printf("OPTIONS:\n");
 	printf("  -B, --backup-dir=PATH    Path to backup directory (required)\n");
-	printf("  -t, --tool=TOOL          Filter by backup tool (pg_basebackup, pg_probackup)\n");
-	printf("  -s, --status=STATUS      Filter by status (ok, running, error, corrupt)\n");
+	printf("  -t, --type=TYPE          Filter by tool: auto, pg_basebackup, pg_probackup, pgbackrest\n");
+	printf("  -s, --status=STATUS      Filter by status: all, ok, warning, error, corrupt, orphan, running\n");
+	printf("      --sort-by=FIELD      Sort by: start_time (default), end_time, name, size\n");
+	printf("  -r, --reverse            Reverse sort order\n");
 	printf("  -n, --limit=N            Limit number of results (default: unlimited)\n");
-	printf("  -o, --output=FORMAT      Output format: table, json, csv (default: table)\n");
+	printf("  -d, --max-depth=N        Recursion depth (0 = current dir only, -1 = unlimited, default: -1)\n");
+	printf("  -R, --no-recurse         Scan only the specified directory (alias for --max-depth=0)\n");
+	printf("  -f, --format=FORMAT      Output format: table (default)\n");
 	printf("  -h, --help               Show this help message\n\n");
 
 	printf("EXAMPLES:\n");
 	printf("  pg_backup_auditor list -B /backup/pg\n");
-	printf("  pg_backup_auditor list -B /backup/pg --tool=pg_basebackup\n");
-	printf("  pg_backup_auditor list -B /backup/pg --status=error --output=json\n\n");
+	printf("  pg_backup_auditor list -B /backup/pg --type=pg_probackup\n");
+	printf("  pg_backup_auditor list -B /backup/pg --status=error\n");
+	printf("  pg_backup_auditor list -B /backup/pg --no-recurse\n");
+	printf("  pg_backup_auditor list -B /backup/pg --sort-by=size --reverse --limit=10\n\n");
 }
 
 /*

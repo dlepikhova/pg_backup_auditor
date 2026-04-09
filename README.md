@@ -70,6 +70,12 @@ pg_backup_auditor list --backup-dir=/var/lib/pgbackup
 pg_backup_auditor list -B /var/lib/pgbackup \
   --type=pg_probackup --status=ok --sort-by=start_time --reverse
 
+# Scan only the top-level directory, no subdirectories
+pg_backup_auditor list -B /var/lib/pgbackup --no-recurse
+
+# Show largest 10 backups
+pg_backup_auditor list -B /var/lib/pgbackup --sort-by=size --reverse --limit=10
+
 # Show detailed backup info
 pg_backup_auditor info --backup-dir=/var/lib/pgbackup --backup-id=20240101-120000F
 pg_backup_auditor info --backup-path=/var/lib/pgbackup/main/20240101-120000F
@@ -102,7 +108,8 @@ pg_backup_auditor list --backup-dir=PATH [OPTIONS]
 | `--sort-by=FIELD` | Sort: `start_time` (default), `end_time`, `name`, `size` |
 | `--reverse, -r` | Reverse sort order |
 | `--limit=N, -n N` | Limit total output to N backups |
-| `--max-depth=N, -d N` | Recursion depth (-1 = unlimited) |
+| `--max-depth=N, -d N` | Recursion depth (0 = current dir only, -1 = unlimited) |
+| `--no-recurse, -R` | Scan only the specified directory (alias for `--max-depth=0`) |
 | `--format=FORMAT, -f FORMAT` | Output format: `table` (only `table` is currently supported) |
 
 ### `check`

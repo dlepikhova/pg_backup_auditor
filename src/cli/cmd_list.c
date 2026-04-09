@@ -75,6 +75,7 @@ parse_arguments(int argc, char **argv, ListOptions *opts)
 	bool reverse_seen = false;
 	bool limit_seen = false;
 	bool max_depth_seen = false;
+	bool no_recurse_seen = false;
 
 	static struct option long_options[] = {
 		{"backup-dir",  required_argument, 0, 'B'},
@@ -85,11 +86,12 @@ parse_arguments(int argc, char **argv, ListOptions *opts)
 		{"reverse",     no_argument,       0, 'r'},
 		{"limit",       required_argument, 0, 'n'},
 		{"max-depth",   required_argument, 0, 'd'},
+		{"no-recurse",  no_argument,       0, 'R'},
 		{"help",        no_argument,       0, 'h'},
 		{0, 0, 0, 0}
 	};
 
-	while ((c = getopt_long(argc, argv, "B:t:s:f:rn:d:h",
+	while ((c = getopt_long(argc, argv, "B:t:s:f:rn:d:Rh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -157,6 +159,12 @@ parse_arguments(int argc, char **argv, ListOptions *opts)
 					return EXIT_INVALID_ARGUMENTS;
 				}
 				max_depth_seen = true;
+				break;
+			case 'R':
+				if (check_duplicate_option(no_recurse_seen, "--no-recurse"))
+					return EXIT_INVALID_ARGUMENTS;
+				opts->max_depth = 0;
+				no_recurse_seen = true;
 				break;
 			case 'h':
 				print_list_usage();
@@ -470,15 +478,48 @@ print_table_header(void)
 		   "-------------------", "-------------------", "----------", "----------");
 }
 
+/*
+ * UTF-8 box-drawing characters used for the tree display.
+ *
+ * Each character is 3 bytes but occupies 1 terminal column, so any string
+ * containing them needs extra width padding in printf("%-*s", width, str).
+ * Extra bytes = (byte_length - display_columns).
+ *
+ *   │  = E2 94 82  — vertical line (continuation)
+ *   ├  = E2 94 9C  — tee (non-last child)
+ *   └  = E2 94 94  — corner (last child)
+ *   ─  = E2 94 80  — horizontal line
+ *
+ * Patterns used per level (3 display columns each):
+ *   "│  "   5 bytes, 3 cols → +2 extra
+ *   "   "   3 bytes, 3 cols → +0 extra
+ *   "├─ "   7 bytes, 3 cols → +4 extra  (connector for non-last child)
+ *   "└─ "   7 bytes, 3 cols → +4 extra  (connector for last child)
+ */
+#define TREE_VERT  "\xe2\x94\x82"   /* │ */
+#define TREE_TEE   "\xe2\x94\x9c"   /* ├ */
+#define TREE_LAST  "\xe2\x94\x94"   /* └ */
+#define TREE_HORIZ "\xe2\x94\x80"   /* ─ */
+
+/*
+ * Print one backup row.
+ *
+ * prefix      — tree prefix string to display before the backup_id
+ *               (e.g. "│  ├─ ", empty for root)
+ * extra_bytes — byte length of prefix minus its display width; used to
+ *               compensate printf's %-Ns field width for multi-byte chars
+ */
 static void
-print_backup_table_row(const BackupInfo *backup)
+print_backup_table_row_tree(const BackupInfo *backup,
+							const char *prefix, int extra_bytes)
 {
 	char start_time[20];
 	char end_time[20];
 	char size_str[20];
 	char wal_size_str[20];
+	char pg_ver_str[8];
+	char id_field[128];
 
-	/* Format timestamps */
 	if (backup->start_time > 0)
 		strftime(start_time, sizeof(start_time), "%Y-%m-%d %H:%M:%S",
 				 localtime(&backup->start_time));
@@ -491,7 +532,6 @@ print_backup_table_row(const BackupInfo *backup)
 	else
 		snprintf(end_time, sizeof(end_time), "N/A");
 
-	/* Format size */
 	if (backup->data_bytes > 0)
 	{
 		double size_mb = backup->data_bytes / (1024.0 * 1024.0);
@@ -503,7 +543,6 @@ print_backup_table_row(const BackupInfo *backup)
 	else
 		snprintf(size_str, sizeof(size_str), "N/A");
 
-	/* Format WAL size */
 	if (backup->wal_bytes > 0)
 	{
 		double wal_mb = backup->wal_bytes / (1024.0 * 1024.0);
@@ -515,14 +554,16 @@ print_backup_table_row(const BackupInfo *backup)
 	else
 		snprintf(wal_size_str, sizeof(wal_size_str), "-");
 
-	char pg_ver_str[8];
 	if (backup->pg_version > 0)
 		snprintf(pg_ver_str, sizeof(pg_ver_str), "%d", backup->pg_version / 10000);
 	else
 		snprintf(pg_ver_str, sizeof(pg_ver_str), "-");
 
-	printf("%-20s %-16s %-12s %-16s %-4s %s%-8s%s %-19s %-19s %-10s %-10s\n",
-		   backup->backup_id,
+	snprintf(id_field, sizeof(id_field), "%s%s", prefix, backup->backup_id);
+
+	printf("%-*s %-16s %-12s %-16s %-4s %s%-8s%s %-19s %-19s %-10s %-10s\n",
+		   20 + extra_bytes,
+		   id_field,
 		   backup->node_name[0] ? backup->node_name : "localhost",
 		   backup_type_to_string(backup->type),
 		   backup_tool_to_string(backup->tool),
@@ -537,44 +578,204 @@ print_backup_table_row(const BackupInfo *backup)
 }
 
 /*
+ * Collect direct children of parent_id from arr[0..count-1], sorted by
+ * start_time.  Returns number of children found.
+ */
+static int
+collect_children(BackupInfo **arr, int count, const char *parent_id,
+				 BackupInfo **out, int capacity)
+{
+	int n = 0;
+	for (int i = 0; i < count && n < capacity; i++)
+	{
+		if (arr[i]->parent_backup_id[0] != '\0' &&
+			strcmp(arr[i]->parent_backup_id, parent_id) == 0)
+			out[n++] = arr[i];
+	}
+	if (n > 1)
+		qsort(out, n, sizeof(BackupInfo *), compare_backups_by_time);
+	return n;
+}
+
+/*
+ * Recursively print a backup and all its descendants using proper tree
+ * drawing (├─ for non-last children, └─ for the last child, │ for
+ * vertical continuation lines at intermediate levels).
+ *
+ * indent       — prefix string inherited from the parent level;
+ *                starts empty for root nodes and grows with each level.
+ * indent_extra — extra bytes in `indent` due to multi-byte UTF-8 chars.
+ * is_root      — true for FULL backups (no connector drawn).
+ * is_last      — true if this node is the last child of its parent.
+ */
+static void
+print_chain_recursive(BackupInfo **arr, int count, bool *visited,
+					  BackupInfo *backup,
+					  const char *indent, int indent_extra,
+					  bool is_root, bool is_last,
+					  const ListOptions *opts, OutputStats *stats)
+{
+	/* Mark visited */
+	for (int i = 0; i < count; i++)
+		if (arr[i] == backup) { visited[i] = true; break; }
+
+	if (opts->limit > 0 && stats->count >= opts->limit)
+		return;
+
+	stats->count++;
+	stats->total_bytes += backup->data_bytes;
+
+	/* Build display prefix: indent + connector */
+	char display_prefix[256];
+	int  display_extra;
+
+	if (is_root)
+	{
+		display_prefix[0] = '\0';
+		display_extra = 0;
+	}
+	else
+	{
+		/* connector: "└─ " (last) or "├─ " (non-last), both +4 extra bytes */
+		const char *connector = is_last
+			? TREE_LAST TREE_HORIZ " "
+			: TREE_TEE  TREE_HORIZ " ";
+		snprintf(display_prefix, sizeof(display_prefix), "%s%s", indent, connector);
+		display_extra = indent_extra + 4;
+	}
+
+	print_backup_table_row_tree(backup, display_prefix, display_extra);
+
+	/* Collect children */
+	BackupInfo *children[256];
+	int nchildren = collect_children(arr, count, backup->backup_id,
+									 children, 256);
+	if (nchildren == 0)
+		return;
+
+	/*
+	 * Build indent for the next level.
+	 * If this node is the last child, no vertical line continues → "   ".
+	 * Otherwise a vertical line continues → "│  " (+2 extra bytes).
+	 */
+	char child_indent[256];
+	int  child_indent_extra;
+
+	if (is_root)
+	{
+		child_indent[0] = '\0';
+		child_indent_extra = 0;
+	}
+	else
+	{
+		const char *cont = is_last ? "   " : TREE_VERT "  ";
+		snprintf(child_indent, sizeof(child_indent), "%s%s", indent, cont);
+		child_indent_extra = indent_extra + (is_last ? 0 : 2);
+	}
+
+	for (int i = 0; i < nchildren; i++)
+	{
+		if (opts->limit > 0 && stats->count >= opts->limit)
+			break;
+
+		/* Cycle guard */
+		bool already = false;
+		for (int j = 0; j < count; j++)
+			if (arr[j] == children[i] && visited[j]) { already = true; break; }
+		if (already)
+			continue;
+
+		print_chain_recursive(arr, count, visited, children[i],
+							  child_indent, child_indent_extra,
+							  false, (i == nchildren - 1),
+							  opts, stats);
+	}
+}
+
+/*
  * output_directory_group - Output backups from a single directory
  *
- * Parameters:
- * - directory_path: Path to the directory containing backups
- * - backups: Linked list of BackupInfo structures for this directory
- * - opts: List options including limit
- *
- * Returns:
- * - OutputStats structure containing count and total_bytes for this directory
+ * Displays backups grouped by chain: each FULL backup is followed by its
+ * incremental descendants indented with tree characters (└─).  Backups
+ * within a chain are ordered by start_time; orphaned incrementals (no
+ * FULL ancestor in this group) are printed last at depth 0.
  */
 static OutputStats
-output_directory_group(const char *directory_path, const BackupInfo *backups, const ListOptions *opts)
+output_directory_group(const char *directory_path, BackupInfo *backups,
+					   const ListOptions *opts)
 {
-	const BackupInfo *current = backups;
 	OutputStats stats = {0, 0};
 
 	/* Print directory header */
 	printf("\nDirectory: %s\n", directory_path);
-
-	/* If this is a pg_probackup instance, also show instance name */
-	if (current != NULL && current->instance_name[0] != '\0')
-	{
-		printf("Instance: %s\n", current->instance_name);
-	}
-
+	if (backups != NULL && backups->instance_name[0] != '\0')
+		printf("Instance: %s\n", backups->instance_name);
 	print_table_header();
 
-	/* Print all backups in this directory */
-	while (current != NULL)
+	/* Convert linked list to array for random-access traversal */
+	int count = 0;
+	for (BackupInfo *b = backups; b != NULL; b = b->next)
+		count++;
+	if (count == 0)
+		return stats;
+
+	BackupInfo **arr    = malloc(count * sizeof(BackupInfo *));
+	bool        *visited = calloc(count, sizeof(bool));
+	if (arr == NULL || visited == NULL)
 	{
-		print_backup_table_row(current);
-		stats.count++;
-		stats.total_bytes += current->data_bytes;
-		if (opts->limit > 0 && stats.count >= opts->limit)
-			break;
-		current = current->next;
+		free(arr);
+		free(visited);
+		return stats;
 	}
 
+	int idx = 0;
+	for (BackupInfo *b = backups; b != NULL; b = b->next)
+		arr[idx++] = b;
+
+	/* Sort by start_time for stable chain traversal */
+	qsort(arr, count, sizeof(BackupInfo *), compare_backups_by_time);
+
+	/* Print FULL backups (chain roots) with their incremental subtrees */
+	for (int j = 0; j < count; j++)
+	{
+		if (visited[j] || arr[j]->type != BACKUP_TYPE_FULL)
+			continue;
+		if (opts->limit > 0 && stats.count >= opts->limit)
+			break;
+		print_chain_recursive(arr, count, visited, arr[j],
+							  "", 0, true, true, opts, &stats);
+	}
+
+	/* Print any unvisited backups (incrementals whose FULL is missing/elsewhere),
+	 * sorted by start_lsn so LSN order is preserved even without a chain root. */
+	{
+		BackupInfo *orphans[1024];
+		int nordans = 0;
+		for (int j = 0; j < count && nordans < (int)(sizeof(orphans)/sizeof(*orphans)); j++)
+			if (!visited[j])
+				orphans[nordans++] = arr[j];
+
+		/* Sort orphans by start_lsn ascending */
+		for (int a = 0; a < nordans - 1; a++)
+			for (int b = a + 1; b < nordans; b++)
+				if (orphans[a]->start_lsn > orphans[b]->start_lsn)
+				{
+					BackupInfo *tmp = orphans[a];
+					orphans[a] = orphans[b];
+					orphans[b] = tmp;
+				}
+
+		for (int j = 0; j < nordans; j++)
+		{
+			if (opts->limit > 0 && stats.count >= opts->limit)
+				break;
+			print_chain_recursive(arr, count, visited, orphans[j],
+								  "", 0, true, true, opts, &stats);
+		}
+	}
+
+	free(arr);
+	free(visited);
 	return stats;
 }
 
@@ -685,9 +886,9 @@ output_backups(const BackupInfo *backups, const ListOptions *opts)
 					{
 						/* Swap */
 						char temp[PATH_MAX];
-						snprintf(temp, PATH_MAX, "%s", directory_paths[i]);
-						snprintf(directory_paths[i], PATH_MAX, "%s", directory_paths[j]);
-						snprintf(directory_paths[j], PATH_MAX, "%s", temp);
+						memcpy(temp, directory_paths[i], PATH_MAX);
+						memcpy(directory_paths[i], directory_paths[j], PATH_MAX);
+						memcpy(directory_paths[j], temp, PATH_MAX);
 					}
 				}
 			}
@@ -740,7 +941,11 @@ output_backups(const BackupInfo *backups, const ListOptions *opts)
 				ListOptions group_opts = *opts;
 				group_opts.limit = remaining;
 
-				dir_list = sort_backups(dir_list, opts->sort_by, opts->reverse);
+				/* sort_by is ignored inside output_directory_group — chains
+				 * are always displayed in start_time order for coherent tree
+				 * traversal.  The external sort still affects FULL ordering
+				 * when all backups share the same start_time (rare). */
+				dir_list  = sort_backups(dir_list, opts->sort_by, opts->reverse);
 				dir_stats = output_directory_group(directory_paths[i], dir_list, &group_opts);
 				stats.count += dir_stats.count;
 				stats.total_bytes += dir_stats.total_bytes;
