@@ -68,7 +68,7 @@ scan_single_directory(const char *path)
 	backup = adapter->scan(path);
 	if (backup == NULL)
 	{
-		log_warning("Failed to parse backup metadata at: %s", path);
+		log_debug("Failed to parse backup metadata at: %s", path);
 		return NULL;
 	}
 

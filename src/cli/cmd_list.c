@@ -29,6 +29,7 @@
 #include <string.h>
 #include <strings.h>
 #include <getopt.h>
+#include <unistd.h>  /* getcwd */
 
 /* Command-line options */
 typedef struct {
@@ -706,8 +707,25 @@ output_directory_group(const char *directory_path, BackupInfo *backups,
 {
 	OutputStats stats = {0, 0};
 
-	/* Print directory header */
-	printf("\nDirectory: %s\n", directory_path);
+	/* Print directory header — if path is relative, prepend cwd so that
+	 * inputs like "../backup" display as a full readable path. */
+	char display_buf[PATH_MAX];
+	const char *display_path = directory_path;
+	if (directory_path[0] != '/')
+	{
+		if (getcwd(display_buf, sizeof(display_buf)) != NULL)
+		{
+			size_t cwd_len = strlen(display_buf);
+			size_t dir_len = strlen(directory_path);
+			if (cwd_len + 1 + dir_len < sizeof(display_buf))
+			{
+				display_buf[cwd_len] = '/';
+				memcpy(display_buf + cwd_len + 1, directory_path, dir_len + 1);
+				display_path = display_buf;
+			}
+		}
+	}
+	printf("\nDirectory: %s\n", display_path);
 	if (backups != NULL && backups->instance_name[0] != '\0')
 		printf("Instance: %s\n", backups->instance_name);
 	print_table_header();

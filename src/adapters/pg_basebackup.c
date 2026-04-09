@@ -226,7 +226,7 @@ pg_basebackup_scan(const char *backup_path)
 	 */
 	if (pg_basebackup_read_metadata(backup_path, info) != STATUS_OK)
 	{
-		log_warning("Failed to parse backup metadata at: %s", backup_path);
+		log_debug("Failed to parse backup metadata at: %s", backup_path);
 		info->status = BACKUP_STATUS_ERROR;
 		/* Don't return NULL - we still want to show the backup with ERROR status */
 	}
@@ -600,7 +600,7 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 
 	if (!found_start_time)
 	{
-		log_warning("START TIME not found in backup_label");
+		log_debug("START TIME not found in backup_label");
 		return STATUS_ERROR;
 	}
 
