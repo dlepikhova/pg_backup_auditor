@@ -19,7 +19,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
 
 #include "pg_backup_auditor.h"
 #include "cmd_help.h"
@@ -640,7 +640,11 @@ cmd_audit_main(int argc, char **argv)
 		printf("====================================================\n");
 		printf("Backup Audit\n");
 		printf("====================================================\n");
-		printf("Directory:  %s\n", opts.backup_dir);
+		char resolved_dir[PATH_MAX];
+		const char *display_dir = opts.backup_dir;
+		if (realpath(opts.backup_dir, resolved_dir) != NULL)
+			display_dir = resolved_dir;
+		printf("Directory:  %s\n", display_dir);
 		printf("Time:       %s\n", now_str);
 		printf("====================================================\n\n");
 	}

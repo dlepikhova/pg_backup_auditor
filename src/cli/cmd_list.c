@@ -19,7 +19,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
 
 #include "pg_backup_auditor.h"
 #include "cmd_help.h"
@@ -29,7 +29,6 @@
 #include <string.h>
 #include <strings.h>
 #include <getopt.h>
-#include <unistd.h>  /* getcwd */
 
 /* Command-line options */
 typedef struct {
@@ -707,24 +706,11 @@ output_directory_group(const char *directory_path, BackupInfo *backups,
 {
 	OutputStats stats = {0, 0};
 
-	/* Print directory header — if path is relative, prepend cwd so that
-	 * inputs like "../backup" display as a full readable path. */
+	/* Resolve to absolute path, normalising any ".." components. */
 	char display_buf[PATH_MAX];
 	const char *display_path = directory_path;
-	if (directory_path[0] != '/')
-	{
-		if (getcwd(display_buf, sizeof(display_buf)) != NULL)
-		{
-			size_t cwd_len = strlen(display_buf);
-			size_t dir_len = strlen(directory_path);
-			if (cwd_len + 1 + dir_len < sizeof(display_buf))
-			{
-				display_buf[cwd_len] = '/';
-				memcpy(display_buf + cwd_len + 1, directory_path, dir_len + 1);
-				display_path = display_buf;
-			}
-		}
-	}
+	if (realpath(directory_path, display_buf) != NULL)
+		display_path = display_buf;
 	printf("\nDirectory: %s\n", display_path);
 	if (backups != NULL && backups->instance_name[0] != '\0')
 		printf("Instance: %s\n", backups->instance_name);
