@@ -153,6 +153,173 @@ validate_options(const CheckOptions *opts)
 	return EXIT_SUCCESS;
 }
 
+/* ------------------------------------------------------------------ *
+ * Chain grouping helpers
+ * ------------------------------------------------------------------ */
+
+typedef struct {
+	BackupInfo  *root;      /* Root FULL backup; NULL = orphaned group */
+	BackupInfo **members;   /* Sorted by start_time, oldest first */
+	int          count;
+	int          capacity;
+} BackupChain;
+
+static BackupInfo *
+find_backup_in_list(BackupInfo *list, const char *id)
+{
+	for (BackupInfo *b = list; b != NULL; b = b->next)
+		if (strcmp(b->backup_id, id) == 0)
+			return b;
+	return NULL;
+}
+
+/* Walk up parent links to find the root FULL backup */
+static BackupInfo *
+find_chain_root(BackupInfo *backup, BackupInfo *all_backups)
+{
+	BackupInfo *cur = backup;
+	for (int depth = 0; depth < 1000; depth++)
+	{
+		if (cur->type == BACKUP_TYPE_FULL)
+			return cur;
+		if (cur->parent_backup_id[0] == '\0')
+			return NULL;
+		cur = find_backup_in_list(all_backups, cur->parent_backup_id);
+		if (cur == NULL)
+			return NULL;
+	}
+	return NULL;  /* cycle guard */
+}
+
+static int
+compare_backup_by_time(const void *a, const void *b)
+{
+	time_t ta = (*(const BackupInfo **)a)->start_time;
+	time_t tb = (*(const BackupInfo **)b)->start_time;
+	return (ta > tb) - (ta < tb);
+}
+
+static bool
+chain_append(BackupChain *chain, BackupInfo *backup)
+{
+	if (chain->count == chain->capacity)
+	{
+		int nc = chain->capacity ? chain->capacity * 2 : 8;
+		BackupInfo **nm = realloc(chain->members, nc * sizeof(*nm));
+		if (nm == NULL)
+			return false;
+		chain->members = nm;
+		chain->capacity = nc;
+	}
+	chain->members[chain->count++] = backup;
+	return true;
+}
+
+/*
+ * build_chains — group all_backups by chain root.
+ *
+ * Each FULL backup starts a new chain.  Incrementals are assigned to the
+ * chain of their root FULL.  Backups with no reachable FULL ancestor go
+ * into the orphaned bucket (root = NULL).
+ *
+ * Returns a calloc'd array of BackupChain; *nchains is set to the length.
+ * The orphaned bucket is always last; it is included only if non-empty.
+ */
+static BackupChain *
+build_chains(BackupInfo *all_backups, int *nchains)
+{
+	int full_count = 0;
+	for (BackupInfo *b = all_backups; b != NULL; b = b->next)
+		if (b->type == BACKUP_TYPE_FULL)
+			full_count++;
+
+	BackupChain *chains = calloc(full_count + 1, sizeof(BackupChain));
+	if (chains == NULL)
+		return NULL;
+
+	int ci = 0;
+
+	/* One chain per FULL */
+	for (BackupInfo *b = all_backups; b != NULL; b = b->next)
+	{
+		if (b->type != BACKUP_TYPE_FULL)
+			continue;
+		chains[ci].root = b;
+		chain_append(&chains[ci], b);
+		ci++;
+	}
+
+	/* Assign non-FULL backups to their chain or the orphaned bucket */
+	int orphan = full_count;
+	for (BackupInfo *b = all_backups; b != NULL; b = b->next)
+	{
+		if (b->type == BACKUP_TYPE_FULL)
+			continue;
+
+		BackupInfo *root   = find_chain_root(b, all_backups);
+		int         target = orphan;
+
+		if (root != NULL)
+		{
+			for (int i = 0; i < full_count; i++)
+			{
+				if (chains[i].root == root)
+				{
+					target = i;
+					break;
+				}
+			}
+		}
+		chain_append(&chains[target], b);
+	}
+
+	/* Include orphaned bucket only if non-empty */
+	int total = full_count;
+	if (chains[orphan].count > 0)
+		total++;
+
+	/* Sort members within each chain by start_time */
+	for (int i = 0; i < total; i++)
+	{
+		if (chains[i].count > 1)
+			qsort(chains[i].members, chains[i].count,
+				  sizeof(BackupInfo *), compare_backup_by_time);
+	}
+
+	*nchains = total;
+	return chains;
+}
+
+static void
+free_chains(BackupChain *chains, int count)
+{
+	if (chains == NULL)
+		return;
+	for (int i = 0; i < count; i++)
+		free(chains[i].members);
+	free(chains);
+}
+
+/* Print [OK]/[ERROR]/[WARNING] results for one backup */
+static void
+print_validation_result(ValidationResult *result, const char *indent)
+{
+	for (int i = 0; i < result->error_count; i++)
+		printf("%s  %s[ERROR]%s %s\n",
+			   indent,
+			   use_color ? COLOR_RED   : "", use_color ? COLOR_RESET : "",
+			   result->errors[i]);
+	for (int i = 0; i < result->warning_count; i++)
+		printf("%s  %s[WARNING]%s %s\n",
+			   indent,
+			   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "",
+			   result->warnings[i]);
+	if (result->error_count == 0 && result->warning_count == 0)
+		printf("%s  %s[OK]%s Backup validation: passed\n",
+			   indent,
+			   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
+}
+
 /*
  * cmd_check_main - Main function for the 'check' command
  *
@@ -254,73 +421,144 @@ cmd_check_main(int argc, char **argv)
 	printf("Validation level: %s\n", level_names[opts.level]);
 	printf("====================================================\n");
 
-	BackupInfo *current = backups;
 	int backup_count = 0;
 	int backups_validated = 0;
 	int backups_skipped = 0;
 
-	while (current != NULL)
+	if (opts.backup_id != NULL)
 	{
-		/* Filter by backup_id if specified */
-		if (opts.backup_id != NULL &&
-			strcmp(current->backup_id, opts.backup_id) != 0)
+		/*
+		 * Single-backup mode (--backup-id): validate one backup without
+		 * chain grouping.  The user wants to focus on a specific backup.
+		 */
+		for (BackupInfo *cur = backups; cur != NULL; cur = cur->next)
 		{
-			current = current->next;
-			continue;
-		}
+			if (strcmp(cur->backup_id, opts.backup_id) != 0)
+				continue;
 
-		backup_count++;
-		if (backup_count > 1)
-			printf("\n");  /* Separator between backups */
+			backup_count++;
+			printf("\n%sBackup:%s %s (%s)\n",
+				   use_color ? COLOR_BOLD : "", use_color ? COLOR_RESET : "",
+				   cur->backup_id, backup_tool_to_string(cur->tool));
 
-		printf("%sBackup:%s %s (%s)\n",
-			   use_color ? COLOR_BOLD : "", use_color ? COLOR_RESET : "",
-			   current->backup_id, backup_tool_to_string(current->tool));
-
-		/* Skip validation for backups with ERROR or CORRUPT status */
-		if (current->status == BACKUP_STATUS_ERROR || current->status == BACKUP_STATUS_CORRUPT)
-		{
-			printf("  %s[SKIPPED]%s Status: %s - validation not performed\n",
-				   use_color ? COLOR_CYAN : "", use_color ? COLOR_RESET : "",
-				   backup_status_to_string(current->status));
-			backups_skipped++;
-			current = current->next;
-			continue;
-		}
-
-		backups_validated++;
-
-		/* Run full chain validation at the requested level.
-		 * validate_backup_chain() calls validate_single_backup() for every
-		 * link in the chain (structure → metadata → checksums → WAL). */
-		{
-			WALArchiveInfo *chain_wal = opts.skip_wal ? NULL : wal_info;
-			ValidationResult *chain_result =
-				validate_backup_chain(current, backups, chain_wal, opts.level);
-			if (chain_result != NULL)
+			if (cur->status == BACKUP_STATUS_ERROR ||
+				cur->status == BACKUP_STATUS_CORRUPT)
 			{
-				for (int i = 0; i < chain_result->error_count; i++)
-					printf("  %s[ERROR]%s %s\n",
-						   use_color ? COLOR_RED    : "",
-						   use_color ? COLOR_RESET  : "",
-						   chain_result->errors[i]);
-				for (int i = 0; i < chain_result->warning_count; i++)
-					printf("  %s[WARNING]%s %s\n",
-						   use_color ? COLOR_YELLOW : "",
-						   use_color ? COLOR_RESET  : "",
-						   chain_result->warnings[i]);
-				if (chain_result->error_count == 0 &&
-					chain_result->warning_count == 0)
-					printf("  %s[OK]%s Backup validation: passed\n",
-						   use_color ? COLOR_GREEN  : "",
-						   use_color ? COLOR_RESET  : "");
-				total_errors   += chain_result->error_count;
-				total_warnings += chain_result->warning_count;
-				free_validation_result(chain_result);
+				printf("  %s[SKIPPED]%s Status: %s - validation not performed\n",
+					   use_color ? COLOR_CYAN  : "", use_color ? COLOR_RESET : "",
+					   backup_status_to_string(cur->status));
+				backups_skipped++;
+			}
+			else
+			{
+				backups_validated++;
+				WALArchiveInfo   *chain_wal = opts.skip_wal ? NULL : wal_info;
+				ValidationResult *result    =
+					validate_backup_chain(cur, backups, chain_wal, opts.level);
+				if (result != NULL)
+				{
+					print_validation_result(result, "");
+					total_errors   += result->error_count;
+					total_warnings += result->warning_count;
+					free_validation_result(result);
+				}
+			}
+			break;
+		}
+	}
+	else
+	{
+		/*
+		 * Chain-grouped mode: group backups by FULL root, validate and
+		 * display each chain as a unit.
+		 */
+		int          nchains = 0;
+		BackupChain *chains  = build_chains(backups, &nchains);
+
+		if (chains == NULL)
+		{
+			fprintf(stderr, "Error: Failed to build backup chains\n");
+			free_backup_list(backups);
+			if (wal_info != NULL)
+				free_wal_archive_info(wal_info);
+			return EXIT_GENERAL_ERROR;
+		}
+
+		for (int ci = 0; ci < nchains; ci++)
+		{
+			BackupChain *chain       = &chains[ci];
+			bool         is_orphaned = (chain->root == NULL);
+
+			/* Chain header */
+			printf("\n");
+			if (is_orphaned)
+			{
+				printf("Orphaned Backups\n");
+			}
+			else
+			{
+				char date_str[32] = "N/A";
+				if (chain->root->start_time > 0)
+					strftime(date_str, sizeof(date_str), "%Y-%m-%d",
+							 localtime(&chain->root->start_time));
+
+				int incr_count = chain->count - 1;
+				printf("Chain: %s  %s  %s",
+					   chain->root->backup_id,
+					   backup_tool_to_string(chain->root->tool),
+					   date_str);
+				if (incr_count > 0)
+					printf("  (+%d incremental%s)",
+						   incr_count, incr_count == 1 ? "" : "s");
+				printf("\n");
+			}
+			printf("----------------------------------------------------\n");
+
+			for (int mi = 0; mi < chain->count; mi++)
+			{
+				BackupInfo *cur    = chain->members[mi];
+				bool        is_incr = (cur->type != BACKUP_TYPE_FULL && !is_orphaned);
+				const char *indent = is_incr ? "  " : "";
+
+				backup_count++;
+				printf("\n");
+
+				printf("%s%sBackup:%s %s (%s)",
+					   indent,
+					   use_color ? COLOR_BOLD  : "", use_color ? COLOR_RESET : "",
+					   cur->backup_id,
+					   backup_type_to_string(cur->type));
+				if (cur->parent_backup_id[0] != '\0')
+					printf("  ->  parent: %s", cur->parent_backup_id);
+				printf("\n");
+
+				if (cur->status == BACKUP_STATUS_ERROR ||
+					cur->status == BACKUP_STATUS_CORRUPT)
+				{
+					printf("%s  %s[SKIPPED]%s Status: %s - validation not performed\n",
+						   indent,
+						   use_color ? COLOR_CYAN  : "", use_color ? COLOR_RESET : "",
+						   backup_status_to_string(cur->status));
+					backups_skipped++;
+					continue;
+				}
+
+				backups_validated++;
+
+				WALArchiveInfo   *chain_wal = opts.skip_wal ? NULL : wal_info;
+				ValidationResult *result    =
+					validate_backup_chain(cur, backups, chain_wal, opts.level);
+				if (result != NULL)
+				{
+					print_validation_result(result, indent);
+					total_errors   += result->error_count;
+					total_warnings += result->warning_count;
+					free_validation_result(result);
+				}
 			}
 		}
 
-		current = current->next;
+		free_chains(chains, nchains);
 	}
 
 	/* WAL archive-wide continuity check (once, not per-backup) */

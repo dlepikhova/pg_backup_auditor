@@ -182,11 +182,11 @@ print_backup_info(const BackupInfo *backup)
 	printf("GENERAL:\n");
 	printf("  Backup ID:       %s\n", backup->backup_id);
 	printf("  Node:            %s\n", backup->node_name[0] ? backup->node_name : "localhost");
+	if (backup->backup_from[0] != '\0')
+		printf("  Backup From:     %s\n", backup->backup_from);
 	if (backup->instance_name[0] != '\0')
 		printf("  Instance:        %s\n", backup->instance_name);
 	printf("  Type:            %s\n", backup_type_to_string(backup->type));
-	if (backup->backup_from[0] != '\0')
-		printf("  Backup From:     %s\n", backup->backup_from);
 	printf("  Tool:            %s\n", backup_tool_to_string(backup->tool));
 	if (backup->tool_version[0] != '\0')
 		printf("  Tool Version:    %s\n", backup->tool_version);
