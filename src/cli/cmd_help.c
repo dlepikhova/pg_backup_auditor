@@ -35,6 +35,7 @@ print_general_usage(void)
 	printf("  list    - List available backups\n");
 	printf("  info    - Show detailed backup information\n");
 	printf("  check   - Validate backup consistency\n");
+	printf("  audit   - Audit backup strategy (recovery points, RPO, storage)\n");
 	printf("  help    - Show this help message\n\n");
 	printf("Use 'pg_backup_auditor COMMAND --help' for command-specific options.\n\n");
 }
@@ -165,4 +166,37 @@ print_check_usage(void)
 	printf("  pg_backup_auditor check -B /backup/pg -i 20240101T120000 --skip-wal\n\n");
 	printf("  # Use external WAL archive\n");
 	printf("  pg_backup_auditor check -B /backup/pg --wal-archive=/wal/archive\n\n");
+}
+
+/*
+ * Print usage for 'audit' command
+ */
+void
+print_audit_usage(void)
+{
+	printf("Usage: pg_backup_auditor audit [OPTIONS]\n\n");
+	printf("Audit backup strategy: recovery points, RPO gap, orphaned backups, storage.\n\n");
+
+	printf("OPTIONS:\n");
+	printf("  -B, --backup-dir=PATH    Path to backup directory (required)\n");
+	printf("      --wal-archive=PATH   Path to external WAL archive (optional)\n");
+	printf("  -h, --help               Show this help message\n\n");
+
+	printf("OUTPUT SECTIONS:\n");
+	printf("  CHAINS   - Per-chain status, oldest/latest recovery point, RPO gap\n");
+	printf("  WAL      - Archive coverage, size (requires --wal-archive)\n");
+	printf("  STORAGE  - Total backup size, disk usage, RUNNING backups\n");
+	printf("  Verdict  - Overall assessment: OK / WARNING / CRITICAL\n\n");
+
+	printf("EXIT CODES:\n");
+	printf("  0 - All chains healthy (Verdict: OK)\n");
+	printf("  1 - General error (cannot scan directory, etc.)\n");
+	printf("  2 - Issues detected (Verdict: WARNING or CRITICAL)\n");
+	printf("  4 - Invalid arguments\n\n");
+
+	printf("EXAMPLES:\n");
+	printf("  # Audit backup directory\n");
+	printf("  pg_backup_auditor audit -B /backup/pg\n\n");
+	printf("  # Include WAL archive analysis\n");
+	printf("  pg_backup_auditor audit -B /backup/pg --wal-archive=/wal/archive\n\n");
 }

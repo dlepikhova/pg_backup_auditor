@@ -47,6 +47,7 @@ SRCS = src/main.c \
        src/cli/cmd_list.c \
        src/cli/cmd_check.c \
        src/cli/cmd_info.c \
+       src/cli/cmd_audit.c \
        src/cli/cmd_help.c \
        src/common/xlog.c \
        src/common/logging.c \

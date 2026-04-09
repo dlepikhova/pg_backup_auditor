@@ -43,4 +43,9 @@ void print_info_usage(void);
  */
 void print_check_usage(void);
 
+/*
+ * Print usage for 'audit' command
+ */
+void print_audit_usage(void);
+
 #endif /* CMD_HELP_H */
