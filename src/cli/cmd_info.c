@@ -313,6 +313,9 @@ print_backup_info(const BackupInfo *backup)
 	if (backup->backup_method[0] != '\0')
 		printf("  Backup Method:   %s\n", backup->backup_method);
 
+	if (backup->wal_mode[0] != '\0')
+		printf("  WAL Mode:        %s\n", backup->wal_mode);
+
 	if (backup->backup_label[0] != '\0')
 		printf("  Label:           %s\n", backup->backup_label);
 

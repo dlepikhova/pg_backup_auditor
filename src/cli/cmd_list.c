@@ -471,10 +471,10 @@ get_status_color(BackupStatus status)
 static void
 print_table_header(void)
 {
-	printf("%-20s %-16s %-12s %-16s %-4s %-8s %-19s %-19s %-10s %-10s\n",
-		   "BACKUP ID", "NODE", "TYPE", "TOOL", "PG", "STATUS", "START TIME", "END TIME", "SIZE", "WAL SIZE");
-	printf("%-20s %-16s %-12s %-16s %-4s %-8s %-19s %-19s %-10s %-10s\n",
-		   "--------------------", "----------------", "------------", "----------------", "----", "--------",
+	printf("%-20s %-16s %-12s %-8s %-16s %-4s %-8s %-19s %-19s %-10s %-10s\n",
+		   "BACKUP ID", "NODE", "TYPE", "WAL", "TOOL", "PG", "STATUS", "START TIME", "END TIME", "SIZE", "WAL SIZE");
+	printf("%-20s %-16s %-12s %-8s %-16s %-4s %-8s %-19s %-19s %-10s %-10s\n",
+		   "--------------------", "----------------", "------------", "--------", "----------------", "----", "--------",
 		   "-------------------", "-------------------", "----------", "----------");
 }
 
@@ -561,11 +561,12 @@ print_backup_table_row_tree(const BackupInfo *backup,
 
 	snprintf(id_field, sizeof(id_field), "%s%s", prefix, backup->backup_id);
 
-	printf("%-*s %-16s %-12s %-16s %-4s %s%-8s%s %-19s %-19s %-10s %-10s\n",
+	printf("%-*s %-16s %-12s %-8s %-16s %-4s %s%-8s%s %-19s %-19s %-10s %-10s\n",
 		   20 + extra_bytes,
 		   id_field,
 		   backup->node_name[0] ? backup->node_name : "localhost",
 		   backup_type_to_string(backup->type),
+		   backup->wal_mode[0] ? backup->wal_mode : "-",
 		   backup_tool_to_string(backup->tool),
 		   pg_ver_str,
 		   get_status_color(backup->status),

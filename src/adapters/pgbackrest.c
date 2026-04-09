@@ -264,6 +264,10 @@ parse_pgbackrest_backup_info(const char *backup_info_path, const char *stanza_na
 		info->tool = BACKUP_TOOL_PGBACKREST;
 		info->status = BACKUP_STATUS_OK;
 
+		/* pgBackRest always uses continuous WAL archiving */
+		info->wal_stream = false;
+		snprintf(info->wal_mode, sizeof(info->wal_mode), "archive");
+
 		/* Set tool version from [backrest] section */
 		if (backrest_version[0] != '\0')
 			snprintf(info->tool_version, sizeof(info->tool_version),

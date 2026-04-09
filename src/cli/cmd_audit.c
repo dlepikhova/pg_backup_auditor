@@ -381,6 +381,22 @@ print_chain_audit(const BackupChain *chain, int chain_num)
 			   col, chain_status_label(status), rst);
 	}
 
+	/* WAL mode: use per-backup wal_mode; "mixed" if not all the same */
+	{
+		const char *first = chain->count > 0 ? chain->members[0]->wal_mode : "";
+		bool all_same = true;
+		for (int i = 1; i < chain->count; i++)
+		{
+			if (strcmp(chain->members[i]->wal_mode, first) != 0)
+			{
+				all_same = false;
+				break;
+			}
+		}
+		printf("  WAL Mode:                %s\n",
+			   (first[0] == '\0') ? "-" : (all_same ? first : "mixed"));
+	}
+
 	/* Find oldest/latest completed backup in chain for recovery points */
 	time_t     oldest_time = 0;
 	time_t     latest_time = 0;

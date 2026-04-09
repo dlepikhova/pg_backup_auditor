@@ -434,6 +434,8 @@ pg_probackup_read_metadata(const char *backup_path, BackupInfo *info)
 		if (value[0] != '\0')
 		{
 			info->wal_stream = (strcmp(value, "true") == 0);
+			snprintf(info->wal_mode, sizeof(info->wal_mode), "%s",
+					 info->wal_stream ? "stream" : "archive");
 			value[0] = '\0';
 			continue;
 		}

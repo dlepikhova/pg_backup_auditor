@@ -99,6 +99,7 @@ typedef struct BackupInfo {
 	char            backup_label[128];  /* User-defined label */
 	char            wal_start_file[64]; /* WAL filename from START WAL LOCATION */
 	char            compress_alg[32];   /* Compression algorithm: none, gzip, zstd, lz4, etc. */
+	char            wal_mode[16];       /* Display label: tool-specific WAL mode */
 	struct BackupInfo *next;
 } BackupInfo;
 

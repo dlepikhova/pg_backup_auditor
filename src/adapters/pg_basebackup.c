@@ -270,6 +270,14 @@ pg_basebackup_scan(const char *backup_path)
 		}
 	}
 
+	/* wal_stream and wal_mode: derived from actual WAL presence, not backup_method.
+	 * backup_method="streamed" refers to the data transfer protocol, not WAL handling.
+	 * "embedded" = WAL files are inside the backup (--wal-method=stream or fetch).
+	 * "none"     = no WAL in backup (--wal-method=none), external archive required. */
+	info->wal_stream = (info->wal_bytes > 0);
+	snprintf(info->wal_mode, sizeof(info->wal_mode), "%s",
+			 info->wal_stream ? "embedded" : "none");
+
 	/* end_time fallback: directory mtime (overridden by manifest mtime below) */
 	{
 		struct stat st;
@@ -508,7 +516,6 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 				*newline = '\0';
 
 			str_copy(info->backup_method, value, sizeof(info->backup_method));
-			info->wal_stream = (strcmp(info->backup_method, "streamed") == 0);
 		}
 		/* BACKUP FROM: primary */
 		else if (strncmp(line, "BACKUP FROM:", 12) == 0)
