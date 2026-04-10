@@ -4,9 +4,10 @@ Cross-platform PostgreSQL backup auditor — unified analysis and validation too
 
 ## Features
 
-- **Three adapters**: pg_basebackup, pg_probackup 2.5, pgBackRest
-- **Backup listing** with filtering by tool/status, sorting, grouping by directory
-- **Detailed backup info**: timing, storage, PostgreSQL metadata (LSN, timeline, WAL)
+- **Three adapters**: pg_basebackup, pg_probackup 2.5, pgBackRest (more coming)
+- **Backup listing** with filtering by tool/status, sorting, WAL mode column, tree display for chains
+- **Detailed backup info**: timing, storage, PostgreSQL metadata (LSN, timeline, WAL mode)
+- **Backup audit**: per-chain recovery points, RPO gap, orphaned backups, WAL coverage, disk usage
 - **Backup validation** with 4 levels (basic → standard → checksums → full):
   - Level 1 (basic): on-disk structure — required files and directories, backup chain integrity
   - Level 2 (standard): metadata consistency — timestamps, LSN range, timeline, pg version
@@ -88,6 +89,12 @@ pg_backup_auditor check -B /var/lib/pgbackup --wal-archive=/var/lib/wal --level=
 
 # Validate single backup
 pg_backup_auditor check -B /var/lib/pgbackup --backup-id=20240101-120000F --level=checksums
+
+# Audit backup strategy (recovery points, RPO, storage)
+pg_backup_auditor audit --backup-dir=/var/lib/pgbackup
+
+# Audit with WAL archive analysis
+pg_backup_auditor audit -B /var/lib/pgbackup --wal-archive=/var/lib/wal
 ```
 
 ## Commands
@@ -146,6 +153,34 @@ pg_backup_auditor info --backup-path=PATH
 pg_backup_auditor info --backup-dir=PATH --backup-id=ID
 ```
 
+### `audit`
+
+Assess backup strategy: recovery points, RPO gap, orphaned backups, WAL coverage, disk usage.
+
+```
+pg_backup_auditor audit --backup-dir=PATH [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--backup-dir=PATH, -B PATH` | Backup directory (required) |
+| `--wal-archive=PATH` | External WAL archive for coverage analysis (optional) |
+
+**Output sections:**
+
+| Section | Content |
+|---------|---------|
+| CHAINS | Per-chain: status, WAL mode, oldest/latest recovery point, RPO gap |
+| Orphaned | Incremental backups with no parent FULL |
+| WAL | Archive segment count, size, continuity coverage |
+| STORAGE | Total backup size, disk total/free |
+| Verdict | `OK` / `WARNING` / `CRITICAL` |
+
+**Verdict logic:**
+- `OK` — all chains healthy, no orphans, no WAL gaps
+- `WARNING` — chains restorable but issues detected (orphans, degraded members, WAL gaps)
+- `CRITICAL` — no complete backup chains found
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -173,8 +208,8 @@ pg_basebackup and pg_probackup adapters work with the PostgreSQL version that cr
 - **pgBackRest WAL**: pgBackRest stores WAL in subdirectories with hash-suffixed compressed filenames — this format cannot be scanned by the WAL validator. WAL checks are skipped for pgBackRest backups; a note is shown in output.
 - **pg_basebackup tar format**: per-file checksums inside tar archives require unpacking and are not verified. The manifest self-checksum is still validated.
 - **pgBackRest compressed backups**: per-file checksums require decompression and are not verified for compressed (`pg_data.gz` etc.) backups.
-- **`tool_version`**: the version of the backup tool is not populated (pgBackRest does not expose it in the manifest).
-- **pg_basebackup incremental (PG17+)**: incremental backups created with `pg_basebackup --incremental` are detected but chain validation is not yet implemented.
+- **`tool_version`**: populated for pgBackRest (`backrest-version` from `backup.info`); not yet implemented for pg_basebackup and pg_probackup.
+- **pg_basebackup incremental (PG17+)**: incremental backups created with `pg_basebackup --incremental` are detected and chain-linked via LSN; full chain validation is not yet implemented.
 - **pg_combinebackup (PG17+)**: backups produced by `pg_combinebackup` have `backup_manifest` but no `backup_label`. Metadata parsing from `backup_manifest` is not yet implemented; these backups are listed with status ERROR.
 - **`node_name`**: always reported as `localhost` for pg_basebackup backups. Extraction from the backup directory name or connection metadata is not yet implemented.
 - **pg_probackup custom WAL location**: if `pg_probackup.conf` specifies a non-default WAL archive path, it is ignored. WAL validation always looks in the default location relative to the catalog.
@@ -190,7 +225,7 @@ make test
 meson test -C builddir
 ```
 
-**218 unit tests, 100% passing.**
+**220 unit tests, 100% passing.**
 
 CI matrix: Ubuntu 22.04/24.04 + macOS 14, PostgreSQL 14–18 (PG18 Linux only), GCC and Clang.
 
