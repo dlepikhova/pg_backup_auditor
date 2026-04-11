@@ -42,10 +42,11 @@ add_error(ValidationResult *result, const char *message)
 	if (result == NULL || message == NULL)
 		return;
 
-	result->errors = realloc(result->errors,
-							 sizeof(char *) * (result->error_count + 1));
-	if (result->errors == NULL)
+	char **tmp = realloc(result->errors,
+						 sizeof(char *) * (result->error_count + 1));
+	if (tmp == NULL)
 		return;
+	result->errors = tmp;
 
 	result->errors[result->error_count] = strdup(message);
 	result->error_count++;
@@ -57,10 +58,11 @@ add_warning(ValidationResult *result, const char *message)
 	if (result == NULL || message == NULL)
 		return;
 
-	result->warnings = realloc(result->warnings,
-							   sizeof(char *) * (result->warning_count + 1));
-	if (result->warnings == NULL)
+	char **tmp = realloc(result->warnings,
+						 sizeof(char *) * (result->warning_count + 1));
+	if (tmp == NULL)
 		return;
+	result->warnings = tmp;
 
 	result->warnings[result->warning_count] = strdup(message);
 	result->warning_count++;

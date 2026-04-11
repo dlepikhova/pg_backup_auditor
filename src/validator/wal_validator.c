@@ -40,10 +40,11 @@ add_error(ValidationResult *result, const char *msg)
 	if (result == NULL || msg == NULL)
 		return;
 
-	result->errors = realloc(result->errors,
-							 sizeof(char *) * (result->error_count + 1));
-	if (result->errors == NULL)
+	char **tmp = realloc(result->errors,
+						 sizeof(char *) * (result->error_count + 1));
+	if (tmp == NULL)
 		return;
+	result->errors = tmp;
 
 	result->errors[result->error_count] = strdup(msg);
 	result->error_count++;
@@ -910,13 +911,19 @@ check_wal_availability(BackupInfo *backup, WALArchiveInfo *wal_info)
 			missing_count++;
 
 			/* Add error message */
-			result->error_count++;
-			result->errors = realloc(result->errors, result->error_count * sizeof(char *));
-
 			snprintf(msg_buf, sizeof(msg_buf),
 					 "Missing WAL segment: %08X%08X%08X",
 					 current_seg.timeline, current_seg.log_id, current_seg.seg_id);
-			result->errors[result->error_count - 1] = strdup(msg_buf);
+			{
+				char **tmp = realloc(result->errors,
+									 (result->error_count + 1) * sizeof(char *));
+				if (tmp != NULL)
+				{
+					result->errors = tmp;
+					result->errors[result->error_count] = strdup(msg_buf);
+					result->error_count++;
+				}
+			}
 
 			log_warning("%s", msg_buf);
 		}
@@ -935,9 +942,16 @@ check_wal_availability(BackupInfo *backup, WALArchiveInfo *wal_info)
 		{
 			snprintf(msg_buf, sizeof(msg_buf),
 					 "WAL range check aborted: too many segments");
-			result->error_count++;
-			result->errors = realloc(result->errors, result->error_count * sizeof(char *));
-			result->errors[result->error_count - 1] = strdup(msg_buf);
+			{
+				char **tmp = realloc(result->errors,
+									 (result->error_count + 1) * sizeof(char *));
+				if (tmp != NULL)
+				{
+					result->errors = tmp;
+					result->errors[result->error_count] = strdup(msg_buf);
+					result->error_count++;
+				}
+			}
 			break;
 		}
 	}
