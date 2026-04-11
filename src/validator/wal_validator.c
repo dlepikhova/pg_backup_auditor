@@ -781,8 +781,8 @@ check_wal_continuity(WALArchiveInfo *wal_info)
 	free_wal_gaps(gaps);
 
 	if (result->error_count == 0)
-		log_info("WAL archive continuity OK (%d segment%s)",
-				 wal_info->segment_count,
+		log_debug("WAL archive continuity OK (%d segment%s)",
+				  wal_info->segment_count,
 				 wal_info->segment_count == 1 ? "" : "s");
 	else
 		log_error("WAL archive has %d gap%s",
@@ -950,7 +950,7 @@ check_wal_availability(BackupInfo *backup, WALArchiveInfo *wal_info)
 	}
 	else
 	{
-		log_info("Backup %s has all required WAL segments", backup->backup_id);
+		log_debug("Backup %s has all required WAL segments", backup->backup_id);
 	}
 
 	return result;
@@ -1080,8 +1080,8 @@ check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info)
 	}
 
 	if (result->error_count == 0)
-		log_info("Backup %s: WAL headers OK (%d segment%s checked)",
-				 backup->backup_id, checked, checked == 1 ? "" : "s");
+		log_debug("Backup %s: WAL headers OK (%d segment%s checked)",
+				  backup->backup_id, checked, checked == 1 ? "" : "s");
 	else
 		log_error("Backup %s: %d WAL header error%s (%d segment%s checked)",
 				  backup->backup_id,
@@ -1423,8 +1423,8 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
 	free(arr);
 
 	if (chain_errors == 0)
-		log_info("WAL restore chain: all inter-backup bridges complete "
-				 "(%d backup%s checked)", n, n == 1 ? "" : "s");
+		log_debug("WAL restore chain: all inter-backup bridges complete "
+				  "(%d backup%s checked)", n, n == 1 ? "" : "s");
 	else
 		log_error("WAL restore chain: %d missing segment%s break the recovery chain",
 				  chain_errors, chain_errors == 1 ? "" : "s");
@@ -1501,8 +1501,8 @@ check_wal_archive_headers(WALArchiveInfo *wal_info)
 	}
 
 	if (result->error_count == 0)
-		log_info("WAL archive headers OK (%d segment%s checked)",
-				 checked, checked == 1 ? "" : "s");
+		log_debug("WAL archive headers OK (%d segment%s checked)",
+				  checked, checked == 1 ? "" : "s");
 	else
 		log_error("WAL archive has %d header error%s (%d segment%s checked)",
 				  result->error_count, result->error_count == 1 ? "" : "s",
@@ -1561,8 +1561,8 @@ check_wal_timeline(BackupInfo *backup, WALArchiveInfo *wal_info)
 		log_error("Backup %s: %s", backup->backup_id, msg);
 	}
 	else
-		log_info("Backup %s: timeline history file %s present",
-				 backup->backup_id, history_filename);
+		log_debug("Backup %s: timeline history file %s present",
+				  backup->backup_id, history_filename);
 
 	return result;
 }
