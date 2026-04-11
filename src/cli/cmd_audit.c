@@ -598,8 +598,9 @@ int
 cmd_audit_main(int argc, char **argv)
 {
 	AuditOptions    opts;
-	BackupInfo     *backups  = NULL;
-	WALArchiveInfo *wal_info = NULL;
+	BackupInfo     *backups         = NULL;
+	WALArchiveInfo *wal_info        = NULL;
+	char           *wal_path_alloc  = NULL;  /* auto-detected path, must be freed */
 	int ret;
 
 	log_init();
@@ -624,7 +625,9 @@ cmd_audit_main(int argc, char **argv)
 		return EXIT_NO_BACKUPS_FOUND;
 	}
 
-	/* Scan WAL archive if provided */
+	/* Scan WAL archive — explicit or auto-detected */
+	const char *wal_archive_display = opts.wal_archive;  /* path shown in output */
+
 	if (opts.wal_archive != NULL)
 	{
 		log_info("Scanning WAL archive: %s", opts.wal_archive);
@@ -633,6 +636,35 @@ cmd_audit_main(int argc, char **argv)
 			log_warning("Failed to scan WAL archive: %s", opts.wal_archive);
 		else
 			log_info("Found %d WAL segments in archive", wal_info->segment_count);
+	}
+	else
+	{
+		/* Auto-detect WAL archive for archive-mode backups */
+		for (BackupInfo *b = backups; b != NULL; b = b->next)
+		{
+			if (b->wal_stream || b->start_lsn == 0)
+				continue;
+			BackupAdapter *adapter = get_adapter_for_tool(b->tool);
+			if (adapter == NULL || adapter->get_wal_archive_path == NULL)
+				continue;
+			char *wal_path = adapter->get_wal_archive_path(
+				b->backup_path, b->instance_name);
+			if (wal_path == NULL)
+				continue;
+			log_info("Auto-detected WAL archive: %s", wal_path);
+			wal_info = scan_wal_archive(wal_path);
+			if (wal_info != NULL)
+			{
+				wal_path_alloc    = wal_path;
+				wal_archive_display = wal_path_alloc;
+				log_info("Found %d WAL segments in archive", wal_info->segment_count);
+			}
+			else
+			{
+				free(wal_path);
+			}
+			break;
+		}
 	}
 
 	/* Build chains */
@@ -699,7 +731,7 @@ cmd_audit_main(int argc, char **argv)
 	}
 
 	/* WAL section */
-	wal_ok = print_wal_section(opts.wal_archive, wal_info, backups);
+	wal_ok = print_wal_section(wal_archive_display, wal_info, backups);
 	if (!wal_ok)
 		has_degraded = true;
 
@@ -739,6 +771,8 @@ cmd_audit_main(int argc, char **argv)
 	free_backup_list(backups);
 	if (wal_info != NULL)
 		free_wal_archive_info(wal_info);
+	if (wal_path_alloc != NULL)
+		free(wal_path_alloc);
 
 	return (has_broken || has_degraded) ? EXIT_VALIDATION_FAILED : EXIT_SUCCESS;
 }
