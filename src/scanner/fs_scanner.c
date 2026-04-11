@@ -160,7 +160,9 @@ link_incremental_chains(BackupInfo *list)
 		if (incr->redo_lsn == 0)
 			continue;
 
-		/* Find backup whose stop_lsn matches this incremental's redo_lsn */
+		/* Find backup whose start_lsn matches this incremental's redo_lsn.
+		 * INCREMENTAL FROM LSN in backup_label is the checkpoint LSN at the
+		 * start of the previous backup, i.e. its start_lsn. */
 		for (candidate = list; candidate != NULL; candidate = candidate->next)
 		{
 			if (candidate == incr)
