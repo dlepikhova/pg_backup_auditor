@@ -53,6 +53,7 @@ SRCS = src/main.c \
        src/common/logging.c \
        src/common/string_utils.c \
        src/common/file_utils.c \
+       src/common/crc32c.c \
        src/common/arg_parser.c \
        src/common/ini_parser.c \
        src/common/sha256.c \

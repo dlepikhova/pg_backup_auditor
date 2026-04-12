@@ -22,6 +22,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "pg_backup_auditor.h"
+#include "crc32c.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,25 +30,6 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <stdint.h>
-
-/* CRC32C (Castagnoli) table - initialized on first use */
-static uint32_t crc32c_table[256];
-static bool     crc32c_table_ready = false;
-
-static void
-init_crc32c_table(void)
-{
-	const uint32_t poly = 0x82F63B78U;
-	int i, j;
-	for (i = 0; i < 256; i++)
-	{
-		uint32_t crc = (uint32_t) i;
-		for (j = 0; j < 8; j++)
-			crc = (crc & 1) ? ((crc >> 1) ^ poly) : (crc >> 1);
-		crc32c_table[i] = crc;
-	}
-	crc32c_table_ready = true;
-}
 
 /*
  * compute_file_crc32c - compute CRC32C checksum of a file
@@ -63,19 +45,13 @@ compute_file_crc32c(const char *path, uint32_t *crc_out)
 	size_t   n;
 	uint32_t crc;
 
-	if (!crc32c_table_ready)
-		init_crc32c_table();
-
 	fp = fopen(path, "rb");
 	if (fp == NULL)
 		return false;
 
 	crc = ~0U;
 	while ((n = fread(buf, 1, sizeof(buf), fp)) > 0)
-	{
-		for (size_t i = 0; i < n; i++)
-			crc = (crc >> 8) ^ crc32c_table[(crc ^ buf[i]) & 0xFFU];
-	}
+		crc = crc32c_update(crc, buf, n);
 
 	fclose(fp);
 	*crc_out = ~crc;

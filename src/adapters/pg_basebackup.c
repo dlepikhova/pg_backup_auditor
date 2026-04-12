@@ -28,6 +28,9 @@
 #include <dirent.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 /* Forward declarations */
 static bool pg_basebackup_detect(const char *path);
@@ -43,6 +46,72 @@ static int parse_backup_manifest(const char *manifest_path, BackupInfo *info);
 
 /* Implemented in src/validator/pg_basebackup_validator.c */
 ValidationResult* pg_basebackup_validate_structure(BackupInfo *backup);
+
+/*
+ * Shell-free replacement for popen("tar FLAG TARFILE MEMBER", "r").
+ * Arguments are passed directly to execvp — no shell, no injection risk.
+ * Single-threaded use only (tar_child_pid is a module-level static).
+ */
+static pid_t tar_child_pid = -1;
+
+static FILE *
+tar_popen(const char *flag, const char *tar_path, const char *member)
+{
+	int    pipefd[2];
+	pid_t  pid;
+	int    devnull;
+	FILE  *fp;
+
+	if (pipe(pipefd) != 0)
+		return NULL;
+
+	pid = fork();
+	if (pid < 0)
+	{
+		close(pipefd[0]);
+		close(pipefd[1]);
+		return NULL;
+	}
+
+	if (pid == 0)
+	{
+		close(pipefd[0]);
+		if (dup2(pipefd[1], STDOUT_FILENO) < 0)
+			_exit(127);
+		close(pipefd[1]);
+		devnull = open("/dev/null", O_WRONLY);
+		if (devnull >= 0)
+		{
+			dup2(devnull, STDERR_FILENO);
+			close(devnull);
+		}
+		execlp("tar", "tar", flag, tar_path, member, (char *)NULL);
+		_exit(127);
+	}
+
+	/* parent */
+	close(pipefd[1]);
+	fp = fdopen(pipefd[0], "r");
+	if (fp == NULL)
+	{
+		close(pipefd[0]);
+		waitpid(pid, NULL, 0);
+		return NULL;
+	}
+	tar_child_pid = pid;
+	return fp;
+}
+
+static void
+tar_pclose(FILE *fp)
+{
+	fclose(fp);
+	if (tar_child_pid > 0)
+	{
+		waitpid(tar_child_pid, NULL, 0);
+		tar_child_pid = -1;
+	}
+}
 WALArchiveInfo*   pg_basebackup_get_embedded_wal(BackupInfo *backup);
 
 /* Adapter definition */
@@ -319,25 +388,21 @@ pg_basebackup_scan(const char *backup_path)
 				if (strncmp(tar_entry->d_name, "base.tar", 8) == 0)
 				{
 					char tar_file[PATH_MAX];
-					char extract_cmd[PATH_MAX * 2];
+					const char *flag;
 
 					path_join(tar_file, sizeof(tar_file), backup_path, tar_entry->d_name);
 
-					/* Determine extraction command based on compression */
 					if (strstr(tar_entry->d_name, ".gz") != NULL)
-						snprintf(extract_cmd, sizeof(extract_cmd),
-								"tar -xzOf '%s' PG_VERSION 2>/dev/null", tar_file);
+						flag = "-xzOf";
 					else if (strstr(tar_entry->d_name, ".bz2") != NULL)
-						snprintf(extract_cmd, sizeof(extract_cmd),
-								"tar -xjOf '%s' PG_VERSION 2>/dev/null", tar_file);
-					else if (strstr(tar_entry->d_name, ".xz") != NULL || strstr(tar_entry->d_name, ".lz4") != NULL)
-						snprintf(extract_cmd, sizeof(extract_cmd),
-								"tar -xJOf '%s' PG_VERSION 2>/dev/null", tar_file);
+						flag = "-xjOf";
+					else if (strstr(tar_entry->d_name, ".xz") != NULL ||
+							 strstr(tar_entry->d_name, ".lz4") != NULL)
+						flag = "-xJOf";
 					else
-						snprintf(extract_cmd, sizeof(extract_cmd),
-								"tar -xOf '%s' PG_VERSION 2>/dev/null", tar_file);
+						flag = "-xOf";
 
-					ver_fp = popen(extract_cmd, "r");
+					ver_fp = tar_popen(flag, tar_file, "PG_VERSION");
 					if (ver_fp != NULL)
 					{
 						char version_str[32];
@@ -351,7 +416,7 @@ pg_basebackup_scan(const char *backup_path)
 								log_debug("Extracted PG_VERSION from tar: major=%d, minor=%d", major, minor);
 							}
 						}
-						pclose(ver_fp);
+						tar_pclose(ver_fp);
 					}
 					break;
 				}
@@ -375,7 +440,6 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 {
 	char label_path[PATH_MAX];
 	char tar_path[PATH_MAX];
-	char cmd[PATH_MAX * 2];
 	FILE *fp = NULL;
 	char line[1024];
 	bool found_start_time = false;
@@ -405,27 +469,20 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 					/* Found tar archive, extract backup_label */
 					path_join(tar_path, sizeof(tar_path), backup_path, entry->d_name);
 
-					/* Determine extraction command based on compression */
+					/* Determine tar flag based on compression */
+					const char *tar_flag;
 					if (strstr(entry->d_name, ".gz") != NULL)
-					{
-						snprintf(cmd, sizeof(cmd), "tar -xzOf '%s' backup_label 2>/dev/null", tar_path);
-					}
+						tar_flag = "-xzOf";
 					else if (strstr(entry->d_name, ".bz2") != NULL)
-					{
-						snprintf(cmd, sizeof(cmd), "tar -xjOf '%s' backup_label 2>/dev/null", tar_path);
-					}
-					else if (strstr(entry->d_name, ".xz") != NULL || strstr(entry->d_name, ".lz4") != NULL)
-					{
-						snprintf(cmd, sizeof(cmd), "tar -xJOf '%s' backup_label 2>/dev/null", tar_path);
-					}
+						tar_flag = "-xjOf";
+					else if (strstr(entry->d_name, ".xz") != NULL ||
+							 strstr(entry->d_name, ".lz4") != NULL)
+						tar_flag = "-xJOf";
 					else
-					{
-						/* No compression */
-						snprintf(cmd, sizeof(cmd), "tar -xOf '%s' backup_label 2>/dev/null", tar_path);
-					}
+						tar_flag = "-xOf";
 
 					log_debug("Extracting backup_label from tar: %s", entry->d_name);
-					fp = popen(cmd, "r");
+					fp = tar_popen(tar_flag, tar_path, "backup_label");
 					is_tar = true;
 					break;
 				}
@@ -599,9 +656,9 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 		}
 	}
 
-	/* Close file handle (use pclose for tar, fclose for plain) */
+	/* Close file handle (use tar_pclose for tar, fclose for plain) */
 	if (is_tar)
-		pclose(fp);
+		tar_pclose(fp);
 	else
 		fclose(fp);
 

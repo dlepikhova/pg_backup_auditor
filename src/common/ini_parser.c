@@ -26,6 +26,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 
 /*
@@ -273,7 +275,17 @@ ini_get_int(IniFile *ini, const char *section_name, const char *key, int default
 	if (value == NULL)
 		return default_value;
 
-	return atoi(value);
+	{
+		char *endptr;
+		long result;
+
+		errno = 0;
+		result = strtol(value, &endptr, 10);
+		if (endptr == value || *endptr != '\0' || errno != 0
+			|| result < INT_MIN || result > INT_MAX)
+			return default_value;
+		return (int)result;
+	}
 }
 
 /*

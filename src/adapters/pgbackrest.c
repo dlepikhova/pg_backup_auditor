@@ -33,26 +33,25 @@
 #include <inttypes.h>
 
 /*
- * Extract JSON value from a JSON string
- * Simple parser for basic key-value extraction
+ * Extract JSON value from a JSON string into a caller-supplied buffer.
+ * Returns true on success, false if the key is not found or inputs are NULL.
  */
-static const char*
-get_json_value(const char *json, const char *key)
+static bool
+get_json_value(const char *json, const char *key, char *buf, size_t bufsize)
 {
-	static char value_buf[256];
 	char search_key[128];
 	const char *start, *end;
 	size_t len;
 
-	if (json == NULL || key == NULL)
-		return NULL;
+	if (json == NULL || key == NULL || buf == NULL || bufsize == 0)
+		return false;
 
 	/* Build search pattern: "key": */
 	snprintf(search_key, sizeof(search_key), "\"%s\":", key);
 
 	start = strstr(json, search_key);
 	if (start == NULL)
-		return NULL;
+		return false;
 
 	/* Skip to value */
 	start += strlen(search_key);
@@ -65,7 +64,7 @@ get_json_value(const char *json, const char *key)
 		start++;
 		end = strchr(start, '"');
 		if (end == NULL)
-			return NULL;
+			return false;
 	}
 	/* Handle numeric/boolean values */
 	else
@@ -76,13 +75,13 @@ get_json_value(const char *json, const char *key)
 	}
 
 	len = end - start;
-	if (len >= sizeof(value_buf))
-		len = sizeof(value_buf) - 1;
+	if (len >= bufsize)
+		len = bufsize - 1;
 
-	memcpy(value_buf, start, len);
-	value_buf[len] = '\0';
+	memcpy(buf, start, len);
+	buf[len] = '\0';
 
-	return value_buf;
+	return true;
 }
 
 /*
@@ -276,41 +275,37 @@ parse_pgbackrest_backup_info(const char *backup_info_path, const char *stanza_na
 		/* Parse JSON value for backup metadata */
 		json_value = kv->value;
 
+		char val[256];
+
 		/* Extract backup type */
-		const char *backup_type = get_json_value(json_value, "backup-type");
-		if (backup_type != NULL)
+		if (get_json_value(json_value, "backup-type", val, sizeof(val)))
 		{
-			if (strcmp(backup_type, "full") == 0)
+			if (strcmp(val, "full") == 0)
 				info->type = BACKUP_TYPE_FULL;
-			else if (strcmp(backup_type, "incr") == 0)
+			else if (strcmp(val, "incr") == 0)
 				info->type = BACKUP_TYPE_INCREMENTAL;
-			else if (strcmp(backup_type, "diff") == 0)
+			else if (strcmp(val, "diff") == 0)
 				info->type = BACKUP_TYPE_DELTA;
 		}
 
 		/* Extract timestamps */
-		const char *ts_start = get_json_value(json_value, "backup-timestamp-start");
-		if (ts_start != NULL)
-			info->start_time = (time_t)atoll(ts_start);
+		if (get_json_value(json_value, "backup-timestamp-start", val, sizeof(val)))
+			info->start_time = (time_t)atoll(val);
 
-		const char *ts_stop = get_json_value(json_value, "backup-timestamp-stop");
-		if (ts_stop != NULL)
-			info->end_time = (time_t)atoll(ts_stop);
+		if (get_json_value(json_value, "backup-timestamp-stop", val, sizeof(val)))
+			info->end_time = (time_t)atoll(val);
 
 		/* Extract LSN values */
-		const char *lsn_start = get_json_value(json_value, "backup-lsn-start");
-		if (lsn_start != NULL)
-			parse_lsn(lsn_start, &info->start_lsn);
+		if (get_json_value(json_value, "backup-lsn-start", val, sizeof(val)))
+			parse_lsn(val, &info->start_lsn);
 
-		const char *lsn_stop = get_json_value(json_value, "backup-lsn-stop");
-		if (lsn_stop != NULL)
-			parse_lsn(lsn_stop, &info->stop_lsn);
+		if (get_json_value(json_value, "backup-lsn-stop", val, sizeof(val)))
+			parse_lsn(val, &info->stop_lsn);
 
 		/* Parent backup (DIFF and INCR backups) */
-		const char *prior = get_json_value(json_value, "backup-prior");
-		if (prior != NULL)
-			strncpy(info->parent_backup_id, prior,
-					sizeof(info->parent_backup_id) - 1);
+		if (get_json_value(json_value, "backup-prior", val, sizeof(val)))
+			str_copy(info->parent_backup_id, val,
+					 sizeof(info->parent_backup_id));
 
 		/* Build backup path */
 		backup_dir = strrchr(backup_info_path, '/');
