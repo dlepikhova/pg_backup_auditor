@@ -749,25 +749,47 @@ check_wal_continuity(WALArchiveInfo *wal_info)
 }
 
 /*
- * Check if a WAL segment is present in the archive
+ * Check if a WAL segment is present in the archive.
+ * Segments are sorted by (timeline, log_id, seg_id) — use binary search.
  */
 static bool
 segment_exists_in_archive(WALSegmentName *seg, WALArchiveInfo *wal_info)
 {
-	int i;
+	int lo, hi;
 
 	if (seg == NULL || wal_info == NULL || wal_info->segments == NULL)
 		return false;
 
-	/* Binary search would be more efficient, but linear search is simpler
-	 * and segments are already sorted */
-	for (i = 0; i < wal_info->segment_count; i++)
-	{
-		WALSegmentName *archived = &wal_info->segments[i];
+	lo = 0;
+	hi = wal_info->segment_count - 1;
 
-		if (archived->timeline == seg->timeline &&
-			archived->log_id == seg->log_id &&
-			archived->seg_id == seg->seg_id)
+	while (lo <= hi)
+	{
+		int mid = lo + (hi - lo) / 2;
+		WALSegmentName *archived = &wal_info->segments[mid];
+
+		if (archived->timeline != seg->timeline)
+		{
+			if (archived->timeline < seg->timeline)
+				lo = mid + 1;
+			else
+				hi = mid - 1;
+		}
+		else if (archived->log_id != seg->log_id)
+		{
+			if (archived->log_id < seg->log_id)
+				lo = mid + 1;
+			else
+				hi = mid - 1;
+		}
+		else if (archived->seg_id != seg->seg_id)
+		{
+			if (archived->seg_id < seg->seg_id)
+				lo = mid + 1;
+			else
+				hi = mid - 1;
+		}
+		else
 		{
 			return true;
 		}
