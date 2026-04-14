@@ -546,20 +546,11 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 				}
 			}
 		}
-		/* CHECKPOINT LOCATION: 0/2000080 */
-		else if (strncmp(line, "CHECKPOINT LOCATION:", 20) == 0)
-		{
-			value = line + 20;
-			while (*value == ' ' || *value == '\t')
-				value++;
-
-			/* Parse LSN in format X/X - this is the stop_lsn */
-			unsigned int hi, lo;
-			if (sscanf(value, "%X/%X", &hi, &lo) == 2)
-			{
-				info->stop_lsn = ((uint64_t)hi << 32) | lo;
-			}
-		}
+		/* CHECKPOINT LOCATION: 0/2000080
+		 * This is the LSN of the checkpoint record taken at backup start —
+		 * it is NOT the stop_lsn.  The real stop_lsn (End-LSN) is only
+		 * available in backup_manifest (PG13+), parsed below.  Storing this
+		 * value as stop_lsn would make WAL availability checks too lenient. */
 		/* BACKUP METHOD: streamed */
 		else if (strncmp(line, "BACKUP METHOD:", 14) == 0)
 		{
@@ -689,8 +680,11 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 
 	/*
 	 * Supplemental read from backup_manifest (plain format only):
-	 * - End-LSN from WAL-Ranges overrides CHECKPOINT LOCATION (more accurate)
+	 * - stop_lsn (End-LSN) is not present in backup_label; backup_manifest
+	 *   is the only source of the real stop LSN for pg_basebackup backups
 	 * - end_time from manifest file mtime (manifest is written last)
+	 * For tar format, backup_manifest is inside the archive and not parsed
+	 * here, so stop_lsn remains 0 (unknown) — correct, not misleading.
 	 */
 	if (!is_tar)
 	{

@@ -276,7 +276,7 @@ START_TEST(test_default_node_name)
 }
 END_TEST
 
-/* Test: stop_lsn (CHECKPOINT LOCATION) parsing */
+/* Test: stop_lsn is 0 when backup_manifest is absent (CHECKPOINT LOCATION is not stop_lsn) */
 START_TEST(test_stop_lsn_parsing)
 {
 	setup_test_directories();
@@ -284,8 +284,9 @@ START_TEST(test_stop_lsn_parsing)
 	BackupInfo *info = pg_basebackup_adapter.scan(plain_backup_dir);
 
 	ck_assert_ptr_nonnull(info);
-	/* CHECKPOINT LOCATION: 0/2000060 */
-	ck_assert_uint_eq(info->stop_lsn, 0x2000060ULL);
+	/* stop_lsn comes from backup_manifest End-LSN, not CHECKPOINT LOCATION.
+	 * The fixture has no backup_manifest, so stop_lsn must remain 0. */
+	ck_assert_uint_eq(info->stop_lsn, 0ULL);
 
 	free(info);
 	teardown_test_directories();
