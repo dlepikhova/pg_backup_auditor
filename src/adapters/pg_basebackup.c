@@ -19,7 +19,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
 
 #include "pg_backup_auditor.h"
 #include <stdio.h>
@@ -731,35 +731,58 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
  *
  * pg_basebackup can store WAL in two ways:
  * 1. Included in backup (--wal-method=fetch or stream): pg_wal/ inside backup_path
- * 2. External WAL archive: Requires user configuration (not supported yet)
+ * 2. External WAL archive: checks standard relative paths (../archive, ../wal_archive, etc.)
  *
- * For now, we check if pg_wal exists inside the backup directory.
+ * If found, returns the path (must be freed by caller).
+ * If not found, logs advice to use --wal-archive and returns NULL.
  */
 static char*
 pg_basebackup_get_wal_archive_path(const char *backup_path, const char *instance_name)
 {
 	char *wal_path;
-	char pg_wal_path[PATH_MAX];
+	char candidate_path[PATH_MAX];
+	char resolved_path[PATH_MAX];
 
 	(void) instance_name;  /* Not used for pg_basebackup */
 
 	if (backup_path == NULL)
 		return NULL;
 
-	/* Check for pg_wal directory inside backup */
-	path_join(pg_wal_path, sizeof(pg_wal_path), backup_path, "pg_wal");
-
-	if (is_directory(pg_wal_path))
+	/* Check for pg_wal directory inside backup (embedded WAL) */
+	path_join(candidate_path, sizeof(candidate_path), backup_path, "pg_wal");
+	if (is_directory(candidate_path))
 	{
-		wal_path = strdup(pg_wal_path);
-		log_debug("pg_basebackup WAL path: %s", wal_path);
+		wal_path = strdup(candidate_path);
+		log_debug("pg_basebackup embedded WAL path: %s", wal_path);
 		return wal_path;
 	}
 
-	/* TODO: Support external WAL archive location
-	 * This would require reading PostgreSQL configuration or user-provided path */
-	log_debug("No pg_wal directory found in pg_basebackup backup: %s", backup_path);
-	log_debug("External WAL archive support not yet implemented");
+	/* Check standard external archive relative paths */
+	const char *candidates[] = {
+		"../archive",
+		"../wal_archive",
+		"../pg_wal",
+		"../../archive",
+		NULL
+	};
+
+	for (int i = 0; candidates[i] != NULL; i++)
+	{
+		path_join(candidate_path, sizeof(candidate_path), backup_path, candidates[i]);
+
+		/* Normalize the path to catch symlinks and relative components */
+		if (realpath(candidate_path, resolved_path) != NULL &&
+			is_directory(resolved_path))
+		{
+			wal_path = strdup(resolved_path);
+			log_debug("pg_basebackup external WAL archive found: %s (via %s)",
+					  wal_path, candidates[i]);
+			return wal_path;
+		}
+	}
+
+	log_debug("No pg_wal/ or external WAL archive found for pg_basebackup at: %s; "
+			  "use --wal-archive if external WAL exists", backup_path);
 	return NULL;
 }
 
