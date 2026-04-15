@@ -424,6 +424,88 @@ START_TEST(test_end_time_from_mtime)
 }
 END_TEST
 
+/*
+ * Test: stop_lsn extracted from backup_manifest inside tar archive.
+ *
+ * Creates a real base.tar.gz with both backup_label and backup_manifest
+ * inside it (no plain files alongside).  Verifies that the adapter sets
+ * stop_lsn from the manifest's End-LSN rather than leaving it 0.
+ */
+static char tar_manifest_dir[PATH_MAX];
+
+static void
+setup_tar_manifest_backup(void)
+{
+	char tmpdir[PATH_MAX];
+	char path[PATH_MAX];
+	char cmd[PATH_MAX * 3];
+	FILE *fp;
+
+	snprintf(tar_manifest_dir, sizeof(tar_manifest_dir),
+			 "/tmp/pg_bb_tar_manifest_test_%d", getpid());
+	mkdir(tar_manifest_dir, 0755);
+
+	/* Temp directory to stage files that go inside the archive */
+	snprintf(tmpdir, sizeof(tmpdir), "%s/_stage", tar_manifest_dir);
+	mkdir(tmpdir, 0755);
+
+	/* backup_label */
+	snprintf(path, sizeof(path), "%s/backup_label", tmpdir);
+	fp = fopen(path, "w");
+	fprintf(fp, "START WAL LOCATION: 0/3000028 (file 000000010000000000000003)\n");
+	fprintf(fp, "CHECKPOINT LOCATION: 0/3000060\n");
+	fprintf(fp, "BACKUP METHOD: streamed\n");
+	fprintf(fp, "BACKUP FROM: primary\n");
+	fprintf(fp, "START TIME: 2024-02-01 12:00:00 UTC\n");
+	fprintf(fp, "LABEL: tar manifest test\n");
+	fprintf(fp, "START TIMELINE: 1\n");
+	fclose(fp);
+
+	/* backup_manifest with End-LSN 0/5000000 */
+	snprintf(path, sizeof(path), "%s/backup_manifest", tmpdir);
+	fp = fopen(path, "w");
+	fprintf(fp, "{ \"PostgreSQL-Backup-Manifest-Version\": 1,\n");
+	fprintf(fp, "\"Files\": [],\n");
+	fprintf(fp, "\"WAL-Ranges\": [{ \"Timeline\": 1, \"Start-LSN\": \"0/3000028\", \"End-LSN\": \"0/5000000\" }],\n");
+	fprintf(fp, "\"Manifest-Checksum\": \"abc123\" }\n");
+	fclose(fp);
+
+	/* Bundle into base.tar.gz */
+	snprintf(cmd, sizeof(cmd),
+			 "tar czf '%s/base.tar.gz' -C '%s' backup_label backup_manifest 2>/dev/null",
+			 tar_manifest_dir, tmpdir);
+	system(cmd);
+
+	/* Remove staging dir — only the archive remains */
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmpdir);
+	system(cmd);
+}
+
+static void
+teardown_tar_manifest_backup(void)
+{
+	char cmd[PATH_MAX + 20];
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tar_manifest_dir);
+	system(cmd);
+}
+
+START_TEST(test_stop_lsn_from_tar_manifest)
+{
+	setup_tar_manifest_backup();
+
+	BackupInfo *info = pg_basebackup_adapter.scan(tar_manifest_dir);
+
+	ck_assert_ptr_nonnull(info);
+	/* End-LSN "0/5000000" from backup_manifest inside the tar */
+	ck_assert_uint_eq(info->stop_lsn, 0x5000000ULL);
+	/* start_lsn still comes from backup_label */
+	ck_assert_uint_eq(info->start_lsn, 0x3000028ULL);
+
+	free(info);
+	teardown_tar_manifest_backup();
+}
+END_TEST
+
 /* Create test suite for pg_basebackup adapter */
 Suite *
 pg_basebackup_suite(void)
@@ -457,6 +539,7 @@ pg_basebackup_suite(void)
 	tcase_add_test(tc_metadata, test_timeline_parsing);
 	tcase_add_test(tc_metadata, test_default_node_name);
 	tcase_add_test(tc_metadata, test_stop_lsn_parsing);
+	tcase_add_test(tc_metadata, test_stop_lsn_from_tar_manifest);
 	tcase_add_test(tc_metadata, test_backup_method_parsing);
 	tcase_add_test(tc_metadata, test_backup_from_parsing);
 	tcase_add_test(tc_metadata, test_backup_label_parsing);

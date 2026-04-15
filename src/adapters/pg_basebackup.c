@@ -42,6 +42,7 @@ static void pg_basebackup_cleanup(BackupInfo *info);
 /* Helper functions */
 static bool is_tar_format(const char *path);
 static bool is_plain_format(const char *path);
+static int parse_manifest_stream(FILE *fp, BackupInfo *info);
 static int parse_backup_manifest(const char *manifest_path, BackupInfo *info);
 
 /* Implemented in src/validator/pg_basebackup_validator.c */
@@ -440,6 +441,7 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 {
 	char label_path[PATH_MAX];
 	char tar_path[PATH_MAX];
+	const char *tar_flag = NULL;
 	FILE *fp = NULL;
 	char line[1024];
 	bool found_start_time = false;
@@ -470,7 +472,6 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 					path_join(tar_path, sizeof(tar_path), backup_path, entry->d_name);
 
 					/* Determine tar flag based on compression */
-					const char *tar_flag;
 					if (strstr(entry->d_name, ".gz") != NULL)
 						tar_flag = "-xzOf";
 					else if (strstr(entry->d_name, ".bz2") != NULL)
@@ -679,12 +680,11 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 	}
 
 	/*
-	 * Supplemental read from backup_manifest (plain format only):
+	 * Supplemental read from backup_manifest:
 	 * - stop_lsn (End-LSN) is not present in backup_label; backup_manifest
-	 *   is the only source of the real stop LSN for pg_basebackup backups
-	 * - end_time from manifest file mtime (manifest is written last)
-	 * For tar format, backup_manifest is inside the archive and not parsed
-	 * here, so stop_lsn remains 0 (unknown) — correct, not misleading.
+	 *   is the only source of the real stop LSN for pg_basebackup backups.
+	 * - For plain format: read directly from the file; also get end_time from mtime.
+	 * - For tar format: extract backup_manifest from the same archive via tar_popen.
 	 */
 	if (!is_tar)
 	{
@@ -693,6 +693,19 @@ pg_basebackup_read_metadata(const char *backup_path, BackupInfo *info)
 				  backup_path, "backup_manifest");
 		if (file_exists(manifest_path))
 			parse_backup_manifest(manifest_path, info);
+	}
+	else if (tar_flag != NULL && tar_path[0] != '\0')
+	{
+		FILE *mfp = tar_popen(tar_flag, tar_path, "backup_manifest");
+		if (mfp != NULL)
+		{
+			parse_manifest_stream(mfp, info);
+			tar_pclose(mfp);
+			log_debug("Extracted backup_manifest from tar: stop_lsn=%llX",
+					  (unsigned long long)info->stop_lsn);
+		}
+		else
+			log_debug("backup_manifest not found in tar archive (PG12 or earlier)");
 	}
 
 	/* Try to extract node name from directory name
@@ -797,23 +810,20 @@ parse_quoted_lsn(const char *line, const char *key, uint64_t *out)
  *   false — full parse, fills start_lsn / timeline / backup_id / start_time
  *   true  — only updates stop_lsn and end_time (leaves other fields alone)
  */
+/*
+ * parse_manifest_stream — read backup_manifest metadata from an open FILE*.
+ * Used by both parse_backup_manifest (plain file) and tar extraction.
+ * Does NOT fclose(fp) — caller is responsible.
+ * Does NOT set end_time (no path for mtime) — caller sets it if needed.
+ */
 static int
-parse_backup_manifest(const char *manifest_path, BackupInfo *info)
+parse_manifest_stream(FILE *fp, BackupInfo *info)
 {
-	FILE       *fp;
-	char        line[2048];
-	bool        found_timeline = false;
-	bool        found_start_lsn = false;
-	bool        found_end_lsn = false;
-	time_t      now;
-	struct stat mst;
-
-	fp = fopen(manifest_path, "r");
-	if (fp == NULL)
-	{
-		log_debug("backup_manifest not found: %s", manifest_path);
-		return STATUS_ERROR;
-	}
+	char   line[2048];
+	bool   found_timeline = false;
+	bool   found_start_lsn = false;
+	bool   found_end_lsn = false;
+	time_t now;
 
 	while (fgets(line, sizeof(line), fp) != NULL)
 	{
@@ -852,19 +862,10 @@ parse_backup_manifest(const char *manifest_path, BackupInfo *info)
 			}
 		}
 
-		/* Stop once we've passed WAL-Ranges */
+		/* Stop once we've found all three fields */
 		if (found_timeline && found_start_lsn && found_end_lsn)
 			break;
 	}
-
-	fclose(fp);
-
-	/*
-	 * end_time: backup_manifest is the last file written by pg_basebackup,
-	 * so its mtime is the best available approximation of backup end time.
-	 */
-	if (stat(manifest_path, &mst) == 0)
-		info->end_time = mst.st_mtime;
 
 	if (!found_timeline && !found_start_lsn)
 	{
@@ -894,6 +895,36 @@ parse_backup_manifest(const char *manifest_path, BackupInfo *info)
 			  (unsigned long long)info->stop_lsn);
 
 	return STATUS_OK;
+}
+
+static int
+parse_backup_manifest(const char *manifest_path, BackupInfo *info)
+{
+	FILE       *fp;
+	int         rc;
+	struct stat mst;
+
+	fp = fopen(manifest_path, "r");
+	if (fp == NULL)
+	{
+		log_debug("backup_manifest not found: %s", manifest_path);
+		return STATUS_ERROR;
+	}
+
+	rc = parse_manifest_stream(fp, info);
+	fclose(fp);
+
+	if (rc == STATUS_OK)
+	{
+		/*
+		 * end_time: backup_manifest is the last file written by pg_basebackup,
+		 * so its mtime is the best available approximation of backup end time.
+		 */
+		if (stat(manifest_path, &mst) == 0)
+			info->end_time = mst.st_mtime;
+	}
+
+	return rc;
 }
 
 /*
