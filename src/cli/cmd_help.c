@@ -175,28 +175,62 @@ void
 print_audit_usage(void)
 {
 	printf("Usage: pg_backup_auditor audit [OPTIONS]\n\n");
-	printf("Audit backup strategy: recovery points, RPO gap, orphaned backups, storage.\n\n");
+	printf("Assess backup strategy: recovery points, RPO gap, orphaned backups, WAL coverage,\n");
+	printf("storage capacity and growth. Provides per-chain status and overall verdict.\n\n");
 
 	printf("OPTIONS:\n");
 	printf("  -B, --backup-dir=PATH    Path to backup directory (required)\n");
-	printf("      --wal-archive=PATH   Path to external WAL archive (optional)\n");
+	printf("      --wal-archive=PATH   Path to external WAL archive for coverage analysis (optional)\n");
 	printf("  -h, --help               Show this help message\n\n");
 
 	printf("OUTPUT SECTIONS:\n");
-	printf("  CHAINS   - Per-chain status, oldest/latest recovery point, RPO gap\n");
-	printf("  WAL      - Archive coverage, size (requires --wal-archive)\n");
-	printf("  STORAGE  - Total backup size, disk usage, RUNNING backups\n");
-	printf("  Verdict  - Overall assessment: OK / WARNING / CRITICAL\n\n");
+	printf("  CHAINS\n");
+	printf("    For each backup chain (FULL + DELTA/PAGE/PTRACK/INCR):\n");
+	printf("    - Status: OK, WARNING (gaps/issues), ERROR (critical problems)\n");
+	printf("    - WAL Mode: stream/archive/mixed (how WAL is captured)\n");
+	printf("    - Oldest recovery point: earliest time you can restore to\n");
+	printf("    - Latest recovery point: most recent recovery time\n");
+	printf("    - RPO (Recovery Point Objective) gap: time between backups\n\n");
+	printf("  Orphaned\n");
+	printf("    Incremental/differential backups without a FULL backup parent.\n");
+	printf("    These backups cannot be used for recovery.\n\n");
+	printf("  WAL\n");
+	printf("    Archive statistics and continuity (only with --wal-archive):\n");
+	printf("    - Total segments and size\n");
+	printf("    - Coverage: are segments available for each backup recovery range?\n");
+	printf("    - Continuity: any gaps in the WAL archive?\n\n");
+	printf("  STORAGE\n");
+	printf("    Backup capacity summary:\n");
+	printf("    - Total backup size (all backup data)\n");
+	printf("    - Disk usage (actual filesystem usage)\n");
+	printf("    - RUNNING backups (incomplete backups in progress)\n\n");
+	printf("  Verdict\n");
+	printf("    Overall assessment based on all checks:\n");
+	printf("    - OK:       All chains healthy, no gaps, good recovery coverage\n");
+	printf("    - WARNING:  RPO gaps exist or WAL coverage gaps, but not critical\n");
+	printf("    - CRITICAL: Missing backups, orphaned increments, WAL discontinuity\n\n");
+
+	printf("RPO (RECOVERY POINT OBJECTIVE):\n");
+	printf("  Time between consecutive backups in a chain.\n");
+	printf("  Larger RPO = more data loss if restore to specific point needed.\n");
+	printf("  Example: FULL on Mon, INCR on Wed = 2-day RPO (lose 1 day of data)\n\n");
+
+	printf("WAL MODES:\n");
+	printf("  stream   - WAL archived within the backup (fast recovery, no external archive needed)\n");
+	printf("  archive  - WAL stored separately (flexible, requires --wal-archive for validation)\n");
+	printf("  mixed    - Same backup chain contains both stream and archive backups (not recommended)\n\n");
 
 	printf("EXIT CODES:\n");
 	printf("  0 - All chains healthy (Verdict: OK)\n");
-	printf("  1 - General error (cannot scan directory, etc.)\n");
+	printf("  1 - General error (cannot scan directory, invalid path, etc.)\n");
 	printf("  2 - Issues detected (Verdict: WARNING or CRITICAL)\n");
 	printf("  4 - Invalid arguments\n\n");
 
 	printf("EXAMPLES:\n");
 	printf("  # Audit backup directory\n");
 	printf("  pg_backup_auditor audit -B /backup/pg\n\n");
-	printf("  # Include WAL archive analysis\n");
-	printf("  pg_backup_auditor audit -B /backup/pg --wal-archive=/wal/archive\n\n");
+	printf("  # Include external WAL archive analysis\n");
+	printf("  pg_backup_auditor audit -B /backup/pg --wal-archive=/var/lib/postgresql/wal\n\n");
+	printf("  # Short output (exit code tells you verdict)\n");
+	printf("  pg_backup_auditor audit -B /backup/pg && echo 'All healthy' || echo 'Issues detected'\n\n");
 }

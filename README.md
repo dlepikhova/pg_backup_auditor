@@ -155,11 +155,13 @@ pg_backup_auditor info --backup-dir=PATH --backup-id=ID
 
 ### `audit`
 
-Assess backup strategy: recovery points, RPO gap, orphaned backups, WAL coverage, disk usage.
+Assess backup strategy: recovery points, RPO gap, orphaned backups, WAL coverage, storage capacity.
 
 ```
 pg_backup_auditor audit --backup-dir=PATH [OPTIONS]
 ```
+
+**Options:**
 
 | Option | Description |
 |--------|-------------|
@@ -168,18 +170,23 @@ pg_backup_auditor audit --backup-dir=PATH [OPTIONS]
 
 **Output sections:**
 
-| Section | Content |
-|---------|---------|
-| CHAINS | Per-chain: status, WAL mode, oldest/latest recovery point, RPO gap |
-| Orphaned | Incremental backups with no parent FULL |
-| WAL | Archive segment count, size, continuity coverage |
-| STORAGE | Total backup size, disk total/free |
-| Verdict | `OK` / `WARNING` / `CRITICAL` |
+| Section | Description |
+|---------|-------------|
+| **CHAINS** | Per-chain analysis: status (OK/WARNING/ERROR), WAL mode (stream/archive/mixed), oldest/latest recovery point, RPO gap between backups |
+| **Orphaned** | Incremental/differential backups without a parent FULL backup — these cannot be used for recovery |
+| **WAL** | Archive statistics (requires `--wal-archive`): total segments, size, continuity, coverage for backup recovery ranges |
+| **STORAGE** | Capacity summary: total backup size, disk usage, in-progress RUNNING backups |
+| **Verdict** | Overall assessment: **OK** (healthy chains, good coverage), **WARNING** (RPO gaps exist), or **CRITICAL** (missing backups, WAL gaps) |
 
-**Verdict logic:**
-- `OK` — all chains healthy, no orphans, no WAL gaps
-- `WARNING` — chains restorable but issues detected (orphans, degraded members, WAL gaps)
-- `CRITICAL` — no complete backup chains found
+**RPO (Recovery Point Objective):**
+- Time window between consecutive backups in a chain
+- Example: FULL on Monday, INCR on Wednesday = 2-day RPO (lose 1 day of data in a restore)
+- Larger RPO = higher risk of data loss; smaller RPO = more backup frequency overhead
+
+**WAL modes:**
+- `stream` — WAL embedded in backup (fastest recovery, no external archive needed)
+- `archive` — WAL stored separately (requires `--wal-archive` for validation)
+- `mixed` — same chain contains both (not recommended; indicates inconsistent backup strategy)
 
 ## Exit Codes
 
@@ -233,7 +240,7 @@ make test
 meson test -C builddir
 ```
 
-**231 unit tests, 100% passing.**
+**244 unit tests, 100% passing.**
 
 CI matrix: Ubuntu 22.04/24.04 + macOS 14, PostgreSQL 14–18 (PG18 Linux only), GCC and Clang.
 
