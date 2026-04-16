@@ -215,6 +215,14 @@ pg_basebackup and pg_probackup adapters work with the PostgreSQL version that cr
 - **pg_probackup custom WAL location**: if `pg_probackup.conf` specifies a non-default WAL archive path, it is ignored. WAL validation always looks in the default location relative to the catalog.
 - **pg_probackup tablespace and database map**: entries in `tablespace_map` and `database_map` are not verified against the actual backup file tree.
 
+## Planned for v0.3.0
+
+- **Retention policy validation**: `audit` command will check if the backup strategy meets retention requirements (minimum number of backups, RPO target, backup frequency).
+- **External WAL archive configuration**: for pg_basebackup, support reading WAL archive path from PostgreSQL recovery config or a dedicated settings file.
+- **JSON/YAML output format**: structured output for integration with monitoring systems.
+- **pg_combinebackup full support**: metadata parsing from `backup_manifest` (currently skipped).
+- **pg_basebackup checkpoint_lsn display**: show checkpoint LSN in `info` command output.
+
 ## Testing
 
 ```bash
@@ -225,7 +233,7 @@ make test
 meson test -C builddir
 ```
 
-**220 unit tests, 100% passing.**
+**231 unit tests, 100% passing.**
 
 CI matrix: Ubuntu 22.04/24.04 + macOS 14, PostgreSQL 14–18 (PG18 Linux only), GCC and Clang.
 

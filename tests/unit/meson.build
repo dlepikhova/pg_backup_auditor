@@ -35,6 +35,11 @@ test_sources = files(
   'test_backup_validator.c',
   'test_fs_scanner.c',
   'test_pg_probackup.c',
+  'test_crc32c.c',
+  'test_pg_basebackup_validator.c',
+  'test_pg_probackup_validator.c',
+  'test_pgbackrest_validator.c',
+  'test_file_utils.c',
 )
 
 # Test-specific compiler flags (disable Werror for libcheck compatibility)
