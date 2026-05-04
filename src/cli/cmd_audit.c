@@ -299,6 +299,102 @@ typedef enum {
 	CHAIN_STATUS_BROKEN
 } ChainStatus;
 
+/* Find the latest WAL segment after a given LSN in the archive */
+static bool
+get_latest_wal_lsn(const WALArchiveInfo *wal_info, XLogRecPtr after_lsn,
+				   XLogRecPtr *out_lsn)
+{
+	if (wal_info == NULL || wal_info->segment_count == 0)
+		return false;
+
+	/* Segments are sorted by timeline, log_id, seg_id (highest first after sort) */
+	/* We need to find the last segment that is >= after_lsn */
+	XLogRecPtr max_lsn = 0;
+	bool found = false;
+
+	for (int i = 0; i < wal_info->segment_count; i++)
+	{
+		WALSegmentName *seg = &wal_info->segments[i];
+		XLogRecPtr seg_lsn = ((XLogRecPtr)seg->log_id << 32) | (seg->seg_id * 16 * 1024 * 1024);
+
+		if (seg_lsn > after_lsn)
+		{
+			if (seg_lsn > max_lsn)
+			{
+				max_lsn = seg_lsn;
+				found = true;
+			}
+		}
+	}
+
+	if (found)
+	{
+		*out_lsn = max_lsn;
+		return true;
+	}
+	return false;
+}
+
+/* Calculate how many WAL segments can be safely removed (older than oldest backup) */
+static uint64_t
+calculate_deletable_wal_size(const WALArchiveInfo *wal_info, XLogRecPtr oldest_lsn)
+{
+	if (wal_info == NULL || wal_info->segment_count == 0)
+		return 0;
+
+	uint64_t deletable_size = 0;
+
+	/* All segments before oldest_lsn can be deleted */
+	for (int i = 0; i < wal_info->segment_count; i++)
+	{
+		WALSegmentName *seg = &wal_info->segments[i];
+		XLogRecPtr seg_lsn = ((XLogRecPtr)seg->log_id << 32) | (seg->seg_id * 16 * 1024 * 1024);
+
+		if (seg_lsn < oldest_lsn)
+		{
+			deletable_size += 16 * 1024 * 1024;  /* 16 MB per segment */
+		}
+	}
+
+	return deletable_size;
+}
+
+/* Check if WAL archive covers from backup stop_lsn to the latest segment */
+static bool
+is_wal_continuous_after_lsn(const WALArchiveInfo *wal_info, XLogRecPtr from_lsn)
+{
+	if (wal_info == NULL || wal_info->segment_count == 0)
+		return false;
+
+	/* Check if there's a segment starting at or shortly after from_lsn */
+	/* A segment at LSN X covers [X, X + 16MB) */
+	for (int i = 0; i < wal_info->segment_count; i++)
+	{
+		WALSegmentName *seg = &wal_info->segments[i];
+		XLogRecPtr seg_lsn = ((XLogRecPtr)seg->log_id << 32) | (seg->seg_id * 16 * 1024 * 1024);
+
+		/* If we find a segment that covers from_lsn or is the next one */
+		if (seg_lsn <= from_lsn && seg_lsn + (16UL * 1024 * 1024) > from_lsn)
+			return true;  /* Continuous from backup stop point */
+
+		if (seg_lsn > from_lsn)
+		{
+			/* Check if there's a gap - next segment should start at or before
+			 * the point where previous segment would end */
+			if (i > 0)
+			{
+				WALSegmentName *prev = &wal_info->segments[i - 1];
+				XLogRecPtr prev_lsn = ((XLogRecPtr)prev->log_id << 32) | (prev->seg_id * 16 * 1024 * 1024);
+				if (prev_lsn + (16UL * 1024 * 1024) >= seg_lsn)
+					return true;  /* No gap */
+			}
+			return false;  /* Gap detected */
+		}
+	}
+
+	return false;  /* No segment covers the range */
+}
+
 static ChainStatus
 assess_chain_status(const BackupChain *chain)
 {
@@ -351,7 +447,7 @@ chain_status_color(ChainStatus s)
  * ------------------------------------------------------------------ */
 
 static ChainStatus
-print_chain_audit(const BackupChain *chain, int chain_num)
+print_chain_audit(const BackupChain *chain, int chain_num, const WALArchiveInfo *wal_info)
 {
 	ChainStatus status = assess_chain_status(chain);
 
@@ -433,11 +529,34 @@ print_chain_audit(const BackupChain *chain, int chain_num)
 
 		format_timestamp(oldest_time, ts, sizeof(ts));
 		format_lsn(oldest_lsn, lsn_str, sizeof(lsn_str));
-		printf("  Oldest recovery point:   %s  (%s)\n", ts, lsn_str);
+		printf("  Oldest recovery point:   %s  (%s) [from backup]\n", ts, lsn_str);
 
 		format_timestamp(latest_time, ts, sizeof(ts));
 		format_lsn(latest_lsn, lsn_str, sizeof(lsn_str));
-		printf("  Latest recovery point:   %s  (%s)\n", ts, lsn_str);
+		printf("  Latest recovery point:   %s  (%s) [from backup]\n", ts, lsn_str);
+
+		/* Check if WAL archive extends recovery window */
+		if (wal_info != NULL && wal_info->segment_count > 0)
+		{
+			XLogRecPtr wal_lsn = 0;
+			if (get_latest_wal_lsn(wal_info, latest_lsn, &wal_lsn))
+			{
+				format_lsn(wal_lsn, lsn_str, sizeof(lsn_str));
+
+				/* Check if WAL is continuous from backup stop_lsn */
+				if (is_wal_continuous_after_lsn(wal_info, latest_lsn))
+				{
+					printf("  Latest recovery point:   (with continuous WAL) (%s) [with WAL archive]\n", lsn_str);
+				}
+				else
+				{
+					const char *col = use_color ? COLOR_YELLOW : "";
+					const char *rst = use_color ? COLOR_RESET : "";
+					printf("  Latest recovery point:   (with WAL - %sGAP DETECTED%s) (%s)\n",
+						   col, rst, lsn_str);
+				}
+			}
+		}
 
 		/* RPO gap: time elapsed since last completed backup */
 		time_t now = time(NULL);
@@ -528,6 +647,32 @@ print_wal_section(const char *wal_archive_dir, WALArchiveInfo *wal_info,
 				   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
 		}
 		free_validation_result(chain_result);
+	}
+
+	/* WAL cleanup recommendations */
+	if (backups != NULL && wal_info->segment_count > 0)
+	{
+		/* Find oldest backup's start_lsn to calculate cleanable segments */
+		XLogRecPtr oldest_lsn = 0;
+		for (BackupInfo *b = backups; b != NULL; b = b->next)
+		{
+			if (b->start_lsn > 0)
+			{
+				if (oldest_lsn == 0 || b->start_lsn < oldest_lsn)
+					oldest_lsn = b->start_lsn;
+			}
+		}
+
+		if (oldest_lsn > 0)
+		{
+			uint64_t deletable_size = calculate_deletable_wal_size(wal_info, oldest_lsn);
+			if (deletable_size > 0)
+			{
+				format_bytes(deletable_size, size_str, sizeof(size_str));
+				printf("  Cleanup:    %s of WAL segments can be safely removed (older than oldest backup)\n",
+					   size_str);
+			}
+		}
 	}
 
 	printf("\n");
@@ -718,7 +863,7 @@ cmd_audit_main(int argc, char **argv)
 
 	for (int ci = 0; ci < full_count; ci++)
 	{
-		ChainStatus cs = print_chain_audit(&chains[ci], ci + 1);
+		ChainStatus cs = print_chain_audit(&chains[ci], ci + 1, wal_info);
 		if (cs == CHAIN_STATUS_BROKEN)   has_broken   = true;
 		if (cs == CHAIN_STATUS_DEGRADED) has_degraded = true;
 	}
