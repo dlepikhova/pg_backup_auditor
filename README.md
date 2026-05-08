@@ -95,6 +95,9 @@ pg_backup_auditor audit --backup-dir=/var/lib/pgbackup
 
 # Audit with WAL archive analysis
 pg_backup_auditor audit -B /var/lib/pgbackup --wal-archive=/var/lib/wal
+
+# Audit with detection of unusually small backups
+pg_backup_auditor audit -B /var/lib/pgbackup --detect-size-small
 ```
 
 ## Commands
@@ -167,6 +170,7 @@ pg_backup_auditor audit --backup-dir=PATH [OPTIONS]
 |--------|-------------|
 | `--backup-dir=PATH, -B PATH` | Backup directory (required) |
 | `--wal-archive=PATH` | External WAL archive for coverage analysis (optional) |
+| `--detect-size-small, -s` | Enable detection of unusually small backups as anomalies (optional) |
 
 **Output sections:**
 
@@ -174,6 +178,7 @@ pg_backup_auditor audit --backup-dir=PATH [OPTIONS]
 |---------|-------------|
 | **CHAINS** | Per-chain analysis: status (OK/WARNING/ERROR), WAL mode (stream/archive/mixed), oldest/latest recovery point, RPO gap between backups |
 | **Orphaned** | Incremental/differential backups without a parent FULL backup — these cannot be used for recovery |
+| **Anomalies** | Backups with unusual patterns (size, duration). Size >2x average always reported; size <0.5x average only with `--detect-size-small` |
 | **WAL** | Archive statistics (requires `--wal-archive`): total segments, size, continuity, coverage for backup recovery ranges |
 | **STORAGE** | Capacity summary: total backup size, disk usage, in-progress RUNNING backups |
 | **Verdict** | Overall assessment: **OK** (healthy chains, good coverage), **WARNING** (RPO gaps exist), or **CRITICAL** (missing backups, WAL gaps) |

@@ -40,6 +40,7 @@ extern Suite *pg_basebackup_validator_suite(void);
 extern Suite *pg_probackup_validator_suite(void);
 extern Suite *pgbackrest_validator_suite(void);
 extern Suite *file_utils_suite(void);
+extern Suite *anomaly_detection_suite(void);
 
 int
 main(void)
@@ -66,6 +67,7 @@ main(void)
 	srunner_add_suite(sr, pg_probackup_validator_suite());
 	srunner_add_suite(sr, pgbackrest_validator_suite());
 	srunner_add_suite(sr, file_utils_suite());
+	srunner_add_suite(sr, anomaly_detection_suite());
 
 	/* Run tests */
 	srunner_run_all(sr, CK_NORMAL);

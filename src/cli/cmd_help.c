@@ -179,9 +179,10 @@ print_audit_usage(void)
 	printf("storage capacity and growth. Provides per-chain status and overall verdict.\n\n");
 
 	printf("OPTIONS:\n");
-	printf("  -B, --backup-dir=PATH    Path to backup directory (required)\n");
-	printf("      --wal-archive=PATH   Path to external WAL archive for coverage analysis (optional)\n");
-	printf("  -h, --help               Show this help message\n\n");
+	printf("  -B, --backup-dir=PATH       Path to backup directory (required)\n");
+	printf("      --wal-archive=PATH      Path to external WAL archive for coverage analysis (optional)\n");
+	printf("  -s, --detect-size-small     Detect unusually small backups as anomalies (optional)\n");
+	printf("  -h, --help                  Show this help message\n\n");
 
 	printf("OUTPUT SECTIONS:\n");
 	printf("  CHAINS\n");
@@ -204,6 +205,11 @@ print_audit_usage(void)
 	printf("    - Total backup size (all backup data)\n");
 	printf("    - Disk usage (actual filesystem usage)\n");
 	printf("    - RUNNING backups (incomplete backups in progress)\n\n");
+	printf("  Anomalies\n");
+	printf("    Backups with unusual patterns (by tool and backup type):\n");
+	printf("    - Size anomalies: backups >2x larger than average\n");
+	printf("    - Size anomalies (small): backups <0.5x average (use --detect-size-small to enable)\n");
+	printf("    - Duration anomalies: backups >2x slower/faster than average\n\n");
 	printf("  Verdict\n");
 	printf("    Overall assessment based on all checks:\n");
 	printf("    - OK:       All chains healthy, no gaps, good recovery coverage\n");
@@ -231,6 +237,8 @@ print_audit_usage(void)
 	printf("  pg_backup_auditor audit -B /backup/pg\n\n");
 	printf("  # Include external WAL archive analysis\n");
 	printf("  pg_backup_auditor audit -B /backup/pg --wal-archive=/var/lib/postgresql/wal\n\n");
+	printf("  # Enable detection of unusually small backups\n");
+	printf("  pg_backup_auditor audit -B /backup/pg --detect-size-small\n\n");
 	printf("  # Short output (exit code tells you verdict)\n");
 	printf("  pg_backup_auditor audit -B /backup/pg && echo 'All healthy' || echo 'Issues detected'\n\n");
 }

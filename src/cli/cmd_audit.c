@@ -36,6 +36,7 @@
 typedef struct {
 	char *backup_dir;
 	char *wal_archive;
+	bool detect_size_small;
 } AuditOptions;
 
 static void
@@ -43,6 +44,7 @@ init_options(AuditOptions *opts)
 {
 	opts->backup_dir  = NULL;
 	opts->wal_archive = NULL;
+	opts->detect_size_small = false;
 }
 
 static int
@@ -54,13 +56,14 @@ parse_arguments(int argc, char **argv, AuditOptions *opts)
 	bool wal_archive_seen = false;
 
 	static struct option long_options[] = {
-		{"backup-dir",  required_argument, 0, 'B'},
-		{"wal-archive", required_argument, 0, 'w'},
-		{"help",        no_argument,       0, 'h'},
+		{"backup-dir",           required_argument, 0, 'B'},
+		{"wal-archive",          required_argument, 0, 'w'},
+		{"detect-size-small",    no_argument,       0, 's'},
+		{"help",                 no_argument,       0, 'h'},
 		{0, 0, 0, 0}
 	};
 
-	while ((c = getopt_long(argc, argv, "B:w:h",
+	while ((c = getopt_long(argc, argv, "B:w:sh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -76,6 +79,9 @@ parse_arguments(int argc, char **argv, AuditOptions *opts)
 					return EXIT_INVALID_ARGUMENTS;
 				opts->wal_archive = optarg;
 				wal_archive_seen = true;
+				break;
+			case 's':
+				opts->detect_size_small = true;
 				break;
 			case 'h':
 				print_audit_usage();
@@ -290,6 +296,36 @@ format_timestamp(time_t t, char *buf, size_t size)
 }
 
 /* ------------------------------------------------------------------ *
+ * Anomaly detection
+ * ------------------------------------------------------------------ */
+
+typedef struct {
+	char backup_id[64];
+	const char *anomaly_type;  /* "size_large", "size_small", "duration_long", "duration_short" */
+	double value;
+	double avg;
+	double multiplier;  /* value / avg */
+} AnomalyRecord;
+
+typedef struct {
+	AnomalyRecord *items;
+	int count;
+	int capacity;
+} AnomalyList;
+
+/* Per-backup-type statistics (per tool AND type) */
+typedef struct {
+	BackupTool tool;
+	BackupType type;
+	int count;
+	uint64_t total_size;
+	time_t total_duration;
+	double avg_size;
+	double avg_duration;
+	double stddev_size;
+} BackupTypeStats;
+
+/* ------------------------------------------------------------------ *
  * Chain status assessment
  * ------------------------------------------------------------------ */
 
@@ -298,6 +334,175 @@ typedef enum {
 	CHAIN_STATUS_DEGRADED,
 	CHAIN_STATUS_BROKEN
 } ChainStatus;
+
+/* Calculate statistics for each backup tool+type combination (only OK/WARNING backups) */
+BackupTypeStats*
+calculate_backup_stats(BackupInfo *backups, int *out_count)
+{
+	BackupTypeStats *stats = malloc(30 * sizeof(BackupTypeStats));  /* Max 30 combinations */
+	if (stats == NULL)
+		return NULL;
+
+	int stats_count = 0;
+	memset(stats, 0, 30 * sizeof(BackupTypeStats));
+
+	/* First pass: group by (tool, type) and sum */
+	for (BackupInfo *b = backups; b != NULL; b = b->next)
+	{
+		/* Skip failed/incomplete backups */
+		if (b->status != BACKUP_STATUS_OK && b->status != BACKUP_STATUS_WARNING)
+			continue;
+
+		/* Skip if no data */
+		if (b->data_bytes == 0 || b->start_time == 0 || b->end_time == 0)
+			continue;
+
+		BackupTypeStats *st = NULL;
+		for (int i = 0; i < stats_count; i++)
+		{
+			if (stats[i].tool == b->tool && stats[i].type == b->type)
+			{
+				st = &stats[i];
+				break;
+			}
+		}
+
+		if (st == NULL)
+		{
+			if (stats_count >= 30)
+				break;  /* Too many combinations */
+			st = &stats[stats_count++];
+			st->tool = b->tool;
+			st->type = b->type;
+			st->count = 0;
+			st->total_size = 0;
+			st->total_duration = 0;
+		}
+
+		st->count++;
+		st->total_size += b->data_bytes + b->wal_bytes;
+		st->total_duration += (b->end_time - b->start_time);
+	}
+
+	/* Calculate averages */
+	for (int i = 0; i < stats_count; i++)
+	{
+		if (stats[i].count > 0)
+		{
+			stats[i].avg_size = (double)stats[i].total_size / stats[i].count;
+			stats[i].avg_duration = (double)stats[i].total_duration / stats[i].count;
+		}
+	}
+
+	*out_count = stats_count;
+	return stats;
+}
+
+/* Detect anomalies in backup sizes and durations */
+AnomalyList*
+detect_anomalies(BackupInfo *backups, BackupTypeStats *stats, int stats_count, bool detect_size_small)
+{
+	AnomalyList *anomalies = malloc(sizeof(AnomalyList));
+	if (anomalies == NULL)
+		return NULL;
+
+	anomalies->items = malloc(100 * sizeof(AnomalyRecord));  /* Max 100 anomalies */
+	anomalies->count = 0;
+	anomalies->capacity = 100;
+
+	if (anomalies->items == NULL)
+	{
+		free(anomalies);
+		return NULL;
+	}
+
+	const double SIZE_THRESHOLD = 2.0;     /* 2x average = anomaly */
+	const double DURATION_THRESHOLD = 2.0; /* 2x average = anomaly */
+
+	for (BackupInfo *b = backups; b != NULL; b = b->next)
+	{
+		/* Skip failed/incomplete backups */
+		if (b->status != BACKUP_STATUS_OK && b->status != BACKUP_STATUS_WARNING)
+			continue;
+
+		/* Skip if no data */
+		if (b->data_bytes == 0 || b->start_time == 0 || b->end_time == 0)
+			continue;
+
+		/* Find stats for this (tool, type) combination */
+		BackupTypeStats *st = NULL;
+		for (int i = 0; i < stats_count; i++)
+		{
+			if (stats[i].tool == b->tool && stats[i].type == b->type && stats[i].count > 1)
+			{
+				st = &stats[i];
+				break;
+			}
+		}
+
+		if (st == NULL)
+			continue;  /* Not enough data for this combination */
+
+		uint64_t size = b->data_bytes + b->wal_bytes;
+		time_t duration = b->end_time - b->start_time;
+
+		/* Check for size anomalies */
+		double size_multiplier = size / st->avg_size;
+		if (size_multiplier > SIZE_THRESHOLD)
+		{
+			AnomalyRecord *rec = &anomalies->items[anomalies->count++];
+			str_copy(rec->backup_id, b->backup_id, sizeof(rec->backup_id));
+			rec->anomaly_type = "size_large";
+			rec->value = size;
+			rec->avg = st->avg_size;
+			rec->multiplier = size_multiplier;
+
+			if (anomalies->count >= anomalies->capacity)
+				break;
+		}
+		else if (detect_size_small && size_multiplier < (1.0 / SIZE_THRESHOLD) && size_multiplier > 0)
+		{
+			AnomalyRecord *rec = &anomalies->items[anomalies->count++];
+			str_copy(rec->backup_id, b->backup_id, sizeof(rec->backup_id));
+			rec->anomaly_type = "size_small";
+			rec->value = size;
+			rec->avg = st->avg_size;
+			rec->multiplier = 1.0 / size_multiplier;
+
+			if (anomalies->count >= anomalies->capacity)
+				break;
+		}
+
+		/* Check for duration anomalies */
+		double duration_multiplier = duration / st->avg_duration;
+		if (duration_multiplier > DURATION_THRESHOLD)
+		{
+			AnomalyRecord *rec = &anomalies->items[anomalies->count++];
+			str_copy(rec->backup_id, b->backup_id, sizeof(rec->backup_id));
+			rec->anomaly_type = "duration_long";
+			rec->value = duration;
+			rec->avg = st->avg_duration;
+			rec->multiplier = duration_multiplier;
+
+			if (anomalies->count >= anomalies->capacity)
+				break;
+		}
+		else if (duration_multiplier < (1.0 / DURATION_THRESHOLD) && duration_multiplier > 0)
+		{
+			AnomalyRecord *rec = &anomalies->items[anomalies->count++];
+			str_copy(rec->backup_id, b->backup_id, sizeof(rec->backup_id));
+			rec->anomaly_type = "duration_short";
+			rec->value = duration;
+			rec->avg = st->avg_duration;
+			rec->multiplier = 1.0 / duration_multiplier;
+
+			if (anomalies->count >= anomalies->capacity)
+				break;
+		}
+	}
+
+	return anomalies;
+}
 
 /* Find the latest WAL segment after a given LSN in the archive */
 static bool
@@ -573,6 +778,61 @@ print_chain_audit(const BackupChain *chain, int chain_num, const WALArchiveInfo 
 
 	printf("\n");
 	return status;
+}
+
+/* ------------------------------------------------------------------ *
+ * Section: anomalies
+ * ------------------------------------------------------------------ */
+
+static void
+print_anomalies_section(const AnomalyList *anomalies)
+{
+	if (anomalies == NULL || anomalies->count == 0)
+		return;
+
+	printf("Anomalies\n");
+	printf("----------------------------------------------------\n");
+	printf("  %s[WARNING]%s Detected unusual backup patterns:\n\n",
+		   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "");
+
+	for (int i = 0; i < anomalies->count; i++)
+	{
+		const AnomalyRecord *rec = &anomalies->items[i];
+		char val_str[32], avg_str[32];
+
+		if (strcmp(rec->anomaly_type, "size_large") == 0)
+		{
+			format_bytes(rec->value, val_str, sizeof(val_str));
+			format_bytes(rec->avg, avg_str, sizeof(avg_str));
+			printf("  - %s: size %s (%.1fx larger than avg %s)\n",
+				   rec->backup_id, val_str, rec->multiplier, avg_str);
+		}
+		else if (strcmp(rec->anomaly_type, "size_small") == 0)
+		{
+			format_bytes(rec->value, val_str, sizeof(val_str));
+			format_bytes(rec->avg, avg_str, sizeof(avg_str));
+			printf("  - %s: size %s (%.1fx smaller than avg %s)\n",
+				   rec->backup_id, val_str, rec->multiplier, avg_str);
+		}
+		else if (strcmp(rec->anomaly_type, "duration_long") == 0)
+		{
+			char dur_str[32], avg_dur_str[32];
+			format_duration((time_t)rec->value, dur_str, sizeof(dur_str));
+			format_duration((time_t)rec->avg, avg_dur_str, sizeof(avg_dur_str));
+			printf("  - %s: took %s (%.1fx longer than avg %s)\n",
+				   rec->backup_id, dur_str, rec->multiplier, avg_dur_str);
+		}
+		else if (strcmp(rec->anomaly_type, "duration_short") == 0)
+		{
+			char dur_str[32], avg_dur_str[32];
+			format_duration((time_t)rec->value, dur_str, sizeof(dur_str));
+			format_duration((time_t)rec->avg, avg_dur_str, sizeof(avg_dur_str));
+			printf("  - %s: took %s (%.1fx faster than avg %s)\n",
+				   rec->backup_id, dur_str, rec->multiplier, avg_dur_str);
+		}
+	}
+
+	printf("\n");
 }
 
 /* ------------------------------------------------------------------ *
@@ -875,6 +1135,20 @@ cmd_audit_main(int argc, char **argv)
 		has_degraded = true;
 	}
 
+	/* Anomaly detection */
+	int stats_count = 0;
+	BackupTypeStats *stats = calculate_backup_stats(backups, &stats_count);
+	AnomalyList *anomalies = NULL;
+	if (stats != NULL && stats_count > 0)
+	{
+		anomalies = detect_anomalies(backups, stats, stats_count, opts.detect_size_small);
+	}
+	if (anomalies != NULL && anomalies->count > 0)
+	{
+		print_anomalies_section(anomalies);
+		has_degraded = true;
+	}
+
 	/* WAL section */
 	wal_ok = print_wal_section(wal_archive_display, wal_info, backups);
 	if (!wal_ok)
@@ -912,6 +1186,13 @@ cmd_audit_main(int argc, char **argv)
 	printf("====================================================\n");
 
 	/* Cleanup */
+	if (anomalies != NULL)
+	{
+		free(anomalies->items);
+		free(anomalies);
+	}
+	if (stats != NULL)
+		free(stats);
 	free_chains(chains, nchains);
 	free_backup_list(backups);
 	if (wal_info != NULL)

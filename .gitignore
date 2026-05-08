@@ -94,3 +94,6 @@ perf.data
 perf.data.old
 *.trace
 flamegraph.svg
+
+# Claude Code local settings and memory
+.claude/
