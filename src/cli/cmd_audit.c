@@ -776,7 +776,6 @@ print_chain_audit(const BackupChain *chain, int chain_num, const WALArchiveInfo 
 		printf("  RPO gap:                 N/A\n");
 	}
 
-	printf("\n");
 	return status;
 }
 
@@ -790,10 +789,10 @@ print_anomalies_section(const AnomalyList *anomalies)
 	if (anomalies == NULL || anomalies->count == 0)
 		return;
 
-	printf("Anomalies\n");
-	printf("----------------------------------------------------\n");
-	printf("  %s[WARNING]%s Detected unusual backup patterns:\n\n",
-		   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "");
+	const char *col = use_color ? COLOR_CYAN : "";
+	const char *rst = use_color ? COLOR_RESET : "";
+	printf("%sAnomalies%s\n", col, rst);
+	printf("  Detected unusual backup patterns:\n");
 
 	for (int i = 0; i < anomalies->count; i++)
 	{
@@ -831,8 +830,6 @@ print_anomalies_section(const AnomalyList *anomalies)
 				   rec->backup_id, dur_str, rec->multiplier, avg_dur_str);
 		}
 	}
-
-	printf("\n");
 }
 
 /* ------------------------------------------------------------------ *
@@ -845,7 +842,9 @@ print_orphans_section(const BackupChain *orphan_chain)
 	if (orphan_chain == NULL || orphan_chain->count == 0)
 		return 0;
 
-	printf("Orphaned Backups (%d)\n", orphan_chain->count);
+	const char *col = use_color ? COLOR_CYAN : "";
+	const char *rst = use_color ? COLOR_RESET : "";
+	printf("%sOrphaned Backups (%d)%s\n", col, orphan_chain->count, rst);
 	printf("  ");
 	for (int i = 0; i < orphan_chain->count; i++)
 	{
@@ -854,10 +853,7 @@ print_orphans_section(const BackupChain *orphan_chain)
 		printf("%s", orphan_chain->members[i]->backup_id);
 	}
 	printf("\n");
-	printf("  %s[WARNING]%s These backups cannot be used for restore "
-		   "without their parent FULL backup\n",
-		   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "");
-	printf("\n");
+	printf("  These backups cannot be used for restore without their parent FULL backup\n");
 
 	return orphan_chain->count;
 }
@@ -872,12 +868,13 @@ print_wal_section(const char *wal_archive_dir, WALArchiveInfo *wal_info,
 {
 	bool wal_ok = true;
 
-	printf("WAL\n");
-	printf("----------------------------------------------------\n");
+	const char *col = use_color ? COLOR_CYAN : "";
+	const char *rst = use_color ? COLOR_RESET : "";
+	printf("%sWAL%s\n", col, rst);
 
 	if (wal_archive_dir == NULL || wal_info == NULL)
 	{
-		printf("  No WAL archive provided (use --wal-archive to enable)\n\n");
+		printf("  No WAL archive provided (use --wal-archive to enable)\n");
 		return true;
 	}
 
@@ -935,7 +932,6 @@ print_wal_section(const char *wal_archive_dir, WALArchiveInfo *wal_info,
 		}
 	}
 
-	printf("\n");
 	return wal_ok;
 }
 
@@ -946,8 +942,9 @@ print_wal_section(const char *wal_archive_dir, WALArchiveInfo *wal_info,
 static void
 print_storage_section(const char *backup_dir, BackupInfo *backups)
 {
-	printf("STORAGE\n");
-	printf("----------------------------------------------------\n");
+	const char *col = use_color ? COLOR_CYAN : "";
+	const char *rst = use_color ? COLOR_RESET : "";
+	printf("%sSTORAGE%s\n", col, rst);
 
 	/* Sum backup sizes from metadata */
 	uint64_t total_backup_bytes = 0;
@@ -991,8 +988,6 @@ print_storage_section(const char *backup_dir, BackupInfo *backups)
 			   running_count, running_count == 1 ? " is" : "s are");
 	else
 		printf("  Backups RUNNING:     none\n");
-
-	printf("\n");
 }
 
 /* ------------------------------------------------------------------ *
@@ -1090,17 +1085,19 @@ cmd_audit_main(int argc, char **argv)
 		char   now_str[32];
 		format_timestamp(now, now_str, sizeof(now_str));
 
-		printf("====================================================\n");
-		printf("Backup Audit\n");
-		printf("====================================================\n");
+		const char *title_col = use_color ? COLOR_CYAN : "";
+		const char *rst = use_color ? COLOR_RESET : "";
+
+		printf("%sBackup Audit%s\n", title_col, rst);
 		char resolved_dir[PATH_MAX];
 		const char *display_dir = opts.backup_dir;
 		if (realpath(opts.backup_dir, resolved_dir) != NULL)
 			display_dir = resolved_dir;
 		printf("Directory:  %s\n", display_dir);
 		printf("Time:       %s\n", now_str);
-		printf("====================================================\n\n");
 	}
+
+	printf("\n");
 
 	/* Separate FULL chains from the orphaned bucket (always last if non-empty) */
 	int              full_count    = nchains;
@@ -1118,8 +1115,11 @@ cmd_audit_main(int argc, char **argv)
 	bool wal_ok       = true;
 
 	/* CHAINS section */
-	printf("CHAINS\n");
-	printf("----------------------------------------------------\n\n");
+	{
+		const char *col = use_color ? COLOR_CYAN : "";
+		const char *rst = use_color ? COLOR_RESET : "";
+		printf("%sCHAINS%s\n", col, rst);
+	}
 
 	for (int ci = 0; ci < full_count; ci++)
 	{
@@ -1128,10 +1128,13 @@ cmd_audit_main(int argc, char **argv)
 		if (cs == CHAIN_STATUS_DEGRADED) has_degraded = true;
 	}
 
+	printf("\n────────────────────────────────────────────────────────────────\n");
+
 	/* Orphaned backups */
 	if (orphan_bucket != NULL && orphan_bucket->count > 0)
 	{
 		print_orphans_section(orphan_bucket);
+		printf("────────────────────────────────────────────────────────────────\n");
 		has_degraded = true;
 	}
 
@@ -1146,6 +1149,7 @@ cmd_audit_main(int argc, char **argv)
 	if (anomalies != NULL && anomalies->count > 0)
 	{
 		print_anomalies_section(anomalies);
+		printf("────────────────────────────────────────────────────────────────\n");
 		has_degraded = true;
 	}
 
@@ -1154,36 +1158,38 @@ cmd_audit_main(int argc, char **argv)
 	if (!wal_ok)
 		has_degraded = true;
 
+	printf("────────────────────────────────────────────────────────────────\n");
+
 	/* STORAGE section */
 	print_storage_section(opts.backup_dir, backups);
 
+	printf("\n────────────────────────────────────────────────────────────────\n");
+
 	/* Verdict */
-	printf("====================================================\n");
 	if (has_broken)
 	{
 		const char *col = use_color ? COLOR_RED    : "";
 		const char *rst = use_color ? COLOR_RESET  : "";
-		printf("%sVerdict: CRITICAL%s\n", col, rst);
+		printf("%s✗ Verdict: CRITICAL%s\n", col, rst);
 		if (full_count == 0)
 			printf("  No complete backup chains found.\n");
 		else
-			printf("  One or more backup chains are BROKEN and cannot be used for restore.\n");
+			printf("  One or more backup chains are BROKEN and cannot be restored.\n");
 	}
 	else if (has_degraded)
 	{
 		const char *col = use_color ? COLOR_YELLOW : "";
 		const char *rst = use_color ? COLOR_RESET  : "";
-		printf("%sVerdict: WARNING%s\n", col, rst);
+		printf("%s⚠ Verdict: WARNING%s\n", col, rst);
 		printf("  Backup chains are restorable but issues were detected.\n");
 	}
 	else
 	{
 		const char *col = use_color ? COLOR_GREEN  : "";
 		const char *rst = use_color ? COLOR_RESET  : "";
-		printf("%sVerdict: OK%s\n", col, rst);
+		printf("%s✓ Verdict: OK%s\n", col, rst);
 		printf("  All backup chains are healthy and restorable.\n");
 	}
-	printf("====================================================\n");
 
 	/* Cleanup */
 	if (anomalies != NULL)
