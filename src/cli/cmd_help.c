@@ -36,6 +36,7 @@ print_general_usage(void)
 	printf("  info    - Show detailed backup information\n");
 	printf("  check   - Validate backup consistency\n");
 	printf("  audit   - Audit backup strategy (recovery points, RPO, storage)\n");
+	printf("  stat    - Backup collection statistics\n");
 	printf("  help    - Show this help message\n\n");
 	printf("Use 'pg_backup_auditor COMMAND --help' for command-specific options.\n\n");
 }
@@ -241,4 +242,31 @@ print_audit_usage(void)
 	printf("  pg_backup_auditor audit -B /backup/pg --detect-size-small\n\n");
 	printf("  # Short output (exit code tells you verdict)\n");
 	printf("  pg_backup_auditor audit -B /backup/pg && echo 'All healthy' || echo 'Issues detected'\n\n");
+}
+
+/*
+ * Print usage for 'stat' command
+ */
+void
+print_stat_usage(void)
+{
+	printf("Usage: pg_backup_auditor stat [OPTIONS]\n\n");
+	printf("Display aggregate statistics across entire backup collection.\n");
+	printf("Statistics are grouped by backup tool and backup type.\n\n");
+
+	printf("OPTIONS:\n");
+	printf("  -B, --backup-dir=PATH    Path to backup directory (required)\n");
+	printf("  -h, --help               Show this help message\n\n");
+
+	printf("STATISTICS BY GROUP:\n");
+	printf("  Count     - Number of backups in this group\n");
+	printf("  Total     - Combined size of all backups in group\n");
+	printf("  Avg Size  - Average size per backup\n");
+	printf("  Median    - Middle size (50th percentile)\n\n");
+
+	printf("EXAMPLES:\n");
+	printf("  # Get statistics for all backups\n");
+	printf("  pg_backup_auditor stat -B /backup/pg\n\n");
+	printf("  # Get statistics for specific directory\n");
+	printf("  pg_backup_auditor stat -B /var/lib/pgbackup\n\n");
 }

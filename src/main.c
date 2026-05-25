@@ -31,6 +31,7 @@ extern int cmd_list_main(int argc, char **argv);
 extern int cmd_check_main(int argc, char **argv);
 extern int cmd_info_main(int argc, char **argv);
 extern int cmd_audit_main(int argc, char **argv);
+extern int cmd_stat_main(int argc, char **argv);
 
 static void
 print_version(void)
@@ -94,6 +95,10 @@ main(int argc, char **argv)
 	else if (strcmp(argv[1], "audit") == 0)
 	{
 		ret = cmd_audit_main(argc - 1, argv + 1);
+	}
+	else if (strcmp(argv[1], "stat") == 0)
+	{
+		ret = cmd_stat_main(argc - 1, argv + 1);
 	}
 	else
 	{
