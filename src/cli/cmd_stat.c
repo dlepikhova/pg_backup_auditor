@@ -41,6 +41,9 @@ typedef struct {
 	char       instance_name[64];
 	int        count;
 	uint64_t   total_bytes;
+	int64_t    total_duration;
+	int        duration_count;
+	int        ok_count;
 } StatGroup;
 
 static void
@@ -126,6 +129,23 @@ format_timestamp(time_t t, char *buf, size_t size)
 	strftime(buf, size, "%Y-%m-%d %H:%M:%S", tm_info);
 }
 
+static void
+format_duration(double seconds, char *buf, size_t size)
+{
+	if (seconds < 0)
+	{
+		snprintf(buf, size, "N/A");
+		return;
+	}
+	int secs = (int)seconds;
+	if (secs >= 3600)
+		snprintf(buf, size, "%dh %dm", secs / 3600, (secs % 3600) / 60);
+	else if (secs >= 60)
+		snprintf(buf, size, "%dm %ds", secs / 60, secs % 60);
+	else
+		snprintf(buf, size, "%ds", secs);
+}
+
 static StatGroup *
 find_or_create_group(StatGroup *groups, int *group_count, int group_cap,
 					 BackupTool tool, BackupType type, const char *instance_name)
@@ -146,6 +166,9 @@ find_or_create_group(StatGroup *groups, int *group_count, int group_cap,
 	str_copy(g->instance_name, instance_name, sizeof(g->instance_name));
 	g->count = 0;
 	g->total_bytes = 0;
+	g->total_duration = 0;
+	g->duration_count = 0;
+	g->ok_count = 0;
 
 	(*group_count)++;
 	return g;
@@ -227,6 +250,14 @@ cmd_stat_main(int argc, char **argv)
 		g->count++;
 		uint64_t size = b->data_bytes + b->wal_bytes;
 		g->total_bytes += size;
+
+		if (b->end_time > b->start_time)
+		{
+			g->total_duration += (int64_t)(b->end_time - b->start_time);
+			g->duration_count++;
+		}
+		if (b->status == BACKUP_STATUS_OK)
+			g->ok_count++;
 	}
 
 	/* Sort groups for organized output */
@@ -270,24 +301,31 @@ cmd_stat_main(int argc, char **argv)
 				printf(" / %s", g->instance_name);
 			printf("%s\n", rst);
 
-			printf("  Type      Count    Total Size   Avg Size\n");
-			printf("  ──────────────────────────────────────────\n");
+			printf("  Type      Count    Total Size   Avg Size  Avg Duration   OK%%\n");
+			printf("  ──────────────────────────────────────────────────────────────\n");
 			current_tool = g->tool;
 			str_copy(current_instance, g->instance_name, sizeof(current_instance));
 		}
 
 		/* Calculate statistics */
 		uint64_t avg_bytes = g->total_bytes / g->count;
+		double avg_dur = (g->duration_count > 0)
+			? (double)g->total_duration / g->duration_count : -1.0;
 
-		char total_str[32], avg_str[32];
+		char total_str[32], avg_str[32], dur_str[16], ok_pct_str[8];
 		format_bytes(g->total_bytes, total_str, sizeof(total_str));
 		format_bytes(avg_bytes, avg_str, sizeof(avg_str));
+		format_duration(avg_dur, dur_str, sizeof(dur_str));
+		snprintf(ok_pct_str, sizeof(ok_pct_str), "%d%%",
+				 g->count > 0 ? (g->ok_count * 100 / g->count) : 0);
 
-		printf("  %-8s  %5d   %10s   %9s\n",
+		printf("  %-8s  %5d   %10s   %9s   %11s  %4s\n",
 			   backup_type_to_string(g->type),
 			   g->count,
 			   total_str,
-			   avg_str);
+			   avg_str,
+			   dur_str,
+			   ok_pct_str);
 	}
 
 	/* Summary */

@@ -259,10 +259,11 @@ print_stat_usage(void)
 	printf("  -h, --help               Show this help message\n\n");
 
 	printf("STATISTICS BY GROUP:\n");
-	printf("  Count     - Number of backups in this group\n");
-	printf("  Total     - Combined size of all backups in group\n");
-	printf("  Avg Size  - Average size per backup\n");
-	printf("  Median    - Middle size (50th percentile)\n\n");
+	printf("  Count        - Number of backups in this group\n");
+	printf("  Total Size   - Combined size of all backups in group\n");
+	printf("  Avg Size     - Average size per backup\n");
+	printf("  Avg Duration - Average backup duration (h/m/s), N/A if no valid duration\n");
+	printf("  OK%%          - Percentage of backups with OK status\n\n");
 
 	printf("EXAMPLES:\n");
 	printf("  # Get statistics for all backups\n");
