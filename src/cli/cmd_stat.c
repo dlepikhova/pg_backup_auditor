@@ -46,6 +46,18 @@ typedef struct {
 	int        ok_count;
 } StatGroup;
 
+typedef struct {
+	time_t   start_time;
+	uint64_t data_bytes;
+} FullEntry;
+
+typedef struct {
+	BackupTool tool;
+	char       instance_name[64];
+	FullEntry  fulls[200];
+	int        full_count;
+} GrowthTrack;
+
 static void
 init_options(StatOptions *opts)
 {
@@ -146,6 +158,22 @@ format_duration(double seconds, char *buf, size_t size)
 		snprintf(buf, size, "%ds", secs);
 }
 
+static void
+format_signed_bytes(int64_t bytes, char *buf, size_t size)
+{
+	const char *sign = (bytes < 0) ? "-" : "+";
+	uint64_t abs_bytes = (bytes < 0) ? -bytes : bytes;
+
+	if (abs_bytes >= (uint64_t)1024 * 1024 * 1024)
+		snprintf(buf, size, "%s%.1f GB", sign, abs_bytes / (1024.0 * 1024.0 * 1024.0));
+	else if (abs_bytes >= (uint64_t)1024 * 1024)
+		snprintf(buf, size, "%s%.1f MB", sign, abs_bytes / (1024.0 * 1024.0));
+	else if (abs_bytes >= 1024)
+		snprintf(buf, size, "%s%.1f KB", sign, abs_bytes / 1024.0);
+	else
+		snprintf(buf, size, "%s%llu B", sign, (unsigned long long)abs_bytes);
+}
+
 static StatGroup *
 find_or_create_group(StatGroup *groups, int *group_count, int group_cap,
 					 BackupTool tool, BackupType type, const char *instance_name)
@@ -192,6 +220,155 @@ compare_groups(const void *a, const void *b)
 	if (strcmp(ga->instance_name, gb->instance_name) != 0)
 		return strcmp(ga->instance_name, gb->instance_name);
 	return (int)ga->type - (int)gb->type;
+}
+
+static int
+compare_full_entries(const void *a, const void *b)
+{
+	const FullEntry *fa = (const FullEntry *)a;
+	const FullEntry *fb = (const FullEntry *)b;
+	return (int)(fa->start_time - fb->start_time);
+}
+
+static void
+print_growth_efficiency(BackupInfo *backups, StatGroup *groups, int group_count)
+{
+	GrowthTrack tracks[20];
+	int track_count = 0;
+
+	for (BackupInfo *b = backups; b != NULL; b = b->next)
+	{
+		if (b->type == BACKUP_TYPE_FULL && b->data_bytes > 0)
+		{
+			GrowthTrack *track = NULL;
+			for (int i = 0; i < track_count; i++)
+			{
+				if (tracks[i].tool == b->tool &&
+					strcmp(tracks[i].instance_name, b->instance_name) == 0)
+				{
+					track = &tracks[i];
+					break;
+				}
+			}
+
+			if (track == NULL)
+			{
+				if (track_count >= 20)
+					continue;
+				track = &tracks[track_count];
+				track->tool = b->tool;
+				str_copy(track->instance_name, b->instance_name, sizeof(track->instance_name));
+				track->full_count = 0;
+				track_count++;
+			}
+
+			if (track->full_count < 200)
+			{
+				track->fulls[track->full_count].start_time = b->start_time;
+				track->fulls[track->full_count].data_bytes = b->data_bytes;
+				track->full_count++;
+			}
+		}
+	}
+
+	if (track_count == 0)
+		return;
+
+	printf("\n");
+	const char *col = use_color ? COLOR_CYAN : "";
+	const char *rst = use_color ? COLOR_RESET : "";
+	printf("%sGROWTH & EFFICIENCY%s\n", col, rst);
+	printf("  ──────────────────────────────────────────────────────────\n\n");
+
+	for (int t = 0; t < track_count; t++)
+	{
+		GrowthTrack *track = &tracks[t];
+		qsort(track->fulls, track->full_count, sizeof(FullEntry), compare_full_entries);
+
+		printf("  %s", backup_tool_to_string(track->tool));
+		if (track->instance_name[0] != '\0' && strcmp(track->instance_name, "localhost") != 0)
+			printf(" / %s", track->instance_name);
+		printf("\n");
+
+		if (track->full_count == 0)
+		{
+			printf("    (no FULL backups)\n\n");
+			continue;
+		}
+		else if (track->full_count == 1)
+		{
+			printf("    FULL growth:  N/A (need ≥2 FULL backups)\n");
+		}
+		else
+		{
+			int64_t sum_growth = 0, min_growth = 0, max_growth = 0;
+			for (int i = 1; i < track->full_count; i++)
+			{
+				int64_t growth = (int64_t)track->fulls[i].data_bytes -
+								 (int64_t)track->fulls[i - 1].data_bytes;
+				sum_growth += growth;
+				if (i == 1 || growth < min_growth)
+					min_growth = growth;
+				if (i == 1 || growth > max_growth)
+					max_growth = growth;
+			}
+
+			char avg_str[32], min_str[32], max_str[32];
+			double avg_growth = (double)sum_growth / (track->full_count - 1);
+			format_signed_bytes((int64_t)avg_growth, avg_str, sizeof(avg_str));
+			format_signed_bytes(min_growth, min_str, sizeof(min_str));
+			format_signed_bytes(max_growth, max_str, sizeof(max_str));
+
+			printf("    FULL growth:  avg %s   (min %s .. max %s, %d intervals)\n",
+				   avg_str, min_str, max_str, track->full_count - 1);
+		}
+
+		StatGroup *full_group = NULL;
+		for (int i = 0; i < group_count; i++)
+		{
+			if (groups[i].tool == track->tool &&
+				groups[i].type == BACKUP_TYPE_FULL &&
+				strcmp(groups[i].instance_name, track->instance_name) == 0)
+			{
+				full_group = &groups[i];
+				break;
+			}
+		}
+
+		if (full_group == NULL || full_group->count == 0)
+		{
+			printf("    (no incremental backups)\n\n");
+			continue;
+		}
+
+		uint64_t avg_full = full_group->total_bytes / full_group->count;
+		bool has_incr = false;
+
+		for (int i = 0; i < group_count; i++)
+		{
+			StatGroup *ig = &groups[i];
+			if (ig->tool == track->tool &&
+				strcmp(ig->instance_name, track->instance_name) == 0 &&
+				ig->type != BACKUP_TYPE_FULL && ig->count > 0)
+			{
+				uint64_t avg_incr = ig->total_bytes / ig->count;
+				int pct = (avg_full > 0) ? (int)(avg_incr * 100 / avg_full) : 0;
+
+				char avg_incr_str[32], avg_full_str[32];
+				format_bytes(avg_incr, avg_incr_str, sizeof(avg_incr_str));
+				format_bytes(avg_full, avg_full_str, sizeof(avg_full_str));
+
+				printf("    %s:  %3d%% of FULL  (avg %s vs %s FULL)\n",
+					   backup_type_to_string(ig->type), pct, avg_incr_str, avg_full_str);
+				has_incr = true;
+			}
+		}
+
+		if (!has_incr)
+			printf("    (no incremental backups)\n");
+
+		printf("\n");
+	}
 }
 
 int
@@ -436,6 +613,9 @@ cmd_stat_main(int argc, char **argv)
 		format_bytes(total_bytes, total_str, sizeof(total_str));
 		printf("  TOTAL            %5d   %s\n", total_count, total_str);
 	}
+
+	/* Growth & Efficiency analysis */
+	print_growth_efficiency(backups, groups, group_count);
 
 	/* Cleanup */
 	free_stat_groups(groups, group_count);

@@ -265,6 +265,12 @@ print_stat_usage(void)
 	printf("  Avg Duration - Average backup duration (h/m/s), N/A if no valid duration\n");
 	printf("  OK%%          - Percentage of backups with OK status\n\n");
 
+	printf("GROWTH & EFFICIENCY SECTION:\n");
+	printf("  Database growth (FULL)  - Average size change between consecutive FULL backups\n");
+	printf("                           Used for capacity planning (e.g., 'need +100 MB storage per day')\n");
+	printf("  Incremental efficiency  - Average incremental backup size as %% of FULL backup size\n");
+	printf("                           Lower %% means efficient incrementals; higher %% may indicate issue\n\n");
+
 	printf("EXAMPLES:\n");
 	printf("  # Get statistics for all backups\n");
 	printf("  pg_backup_auditor stat -B /backup/pg\n\n");
