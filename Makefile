@@ -32,7 +32,7 @@ CFLAGS += -I$(shell $(PG_CONFIG) --includedir)
 CFLAGS += -I$(shell $(PG_CONFIG) --includedir-server)
 
 # Linker flags
-LDFLAGS =
+LDFLAGS = -lm
 
 # Debug build support
 DEBUG ?= 0
@@ -80,7 +80,7 @@ all: $(TARGET)
 
 # Link
 $(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $^
+	$(CC) -o $@ $^ $(LDFLAGS)
 
 # Compile
 %.o: %.c

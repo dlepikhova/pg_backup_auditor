@@ -30,6 +30,8 @@
 #include <string.h>
 #include <time.h>
 #include <getopt.h>
+#include <math.h>
+#include <limits.h>
 
 typedef struct {
 	char *backup_dir;
@@ -41,6 +43,10 @@ typedef struct {
 	char       instance_name[64];
 	int        count;
 	uint64_t   total_bytes;
+	uint64_t   sum_sizes_sq;
+	uint64_t   total_wal_bytes;
+	time_t     min_time;
+	time_t     max_time;
 	int64_t    total_duration;
 	int        duration_count;
 	int        ok_count;
@@ -174,6 +180,19 @@ format_signed_bytes(int64_t bytes, char *buf, size_t size)
 		snprintf(buf, size, "%s%llu B", sign, (unsigned long long)abs_bytes);
 }
 
+static uint64_t
+calculate_stddev(StatGroup *g)
+{
+	if (g->count < 2)
+		return 0;
+
+	double avg = (double)g->total_bytes / g->count;
+	double variance = ((double)g->sum_sizes_sq / g->count) - (avg * avg);
+	if (variance < 0)
+		variance = 0;
+	return (uint64_t)(sqrt(variance) + 0.5);
+}
+
 static StatGroup *
 find_or_create_group(StatGroup *groups, int *group_count, int group_cap,
 					 BackupTool tool, BackupType type, const char *instance_name)
@@ -194,6 +213,10 @@ find_or_create_group(StatGroup *groups, int *group_count, int group_cap,
 	str_copy(g->instance_name, instance_name, sizeof(g->instance_name));
 	g->count = 0;
 	g->total_bytes = 0;
+	g->sum_sizes_sq = 0;
+	g->total_wal_bytes = 0;
+	g->min_time = LLONG_MAX;
+	g->max_time = 0;
 	g->total_duration = 0;
 	g->duration_count = 0;
 	g->ok_count = 0;
@@ -279,6 +302,41 @@ print_growth_efficiency(BackupInfo *backups, StatGroup *groups, int group_count)
 	const char *rst = use_color ? COLOR_RESET : "";
 	printf("%sGROWTH & EFFICIENCY%s\n", col, rst);
 	printf("  ──────────────────────────────────────────────────────────\n\n");
+
+	printf("  Per-type statistics (size with std dev, WAL):\n");
+	for (int i = 0; i < group_count; i++)
+	{
+		if (i == 0 || groups[i].tool != groups[i - 1].tool ||
+			strcmp(groups[i].instance_name, groups[i - 1].instance_name) != 0)
+		{
+			printf("\n    %s", backup_tool_to_string(groups[i].tool));
+			if (groups[i].instance_name[0] != '\0' &&
+				strcmp(groups[i].instance_name, "localhost") != 0)
+				printf(" / %s", groups[i].instance_name);
+			printf("\n");
+		}
+
+		uint64_t avg = groups[i].total_bytes / groups[i].count;
+		uint64_t stddev = calculate_stddev(&groups[i]);
+
+		char avg_str[32], stddev_str[32], wal_str[32];
+		format_bytes(avg, avg_str, sizeof(avg_str));
+		format_bytes(stddev, stddev_str, sizeof(stddev_str));
+
+		uint64_t wal_per_day = 0;
+		if (groups[i].max_time > groups[i].min_time && groups[i].min_time != LLONG_MAX)
+		{
+			time_t days = (groups[i].max_time - groups[i].min_time) / 86400;
+			if (days == 0)
+				days = 1;
+			wal_per_day = groups[i].total_wal_bytes / days;
+		}
+		format_bytes(wal_per_day, wal_str, sizeof(wal_str));
+
+		printf("      %s: %s avg, ±%s σ   %s WAL/day\n",
+			   backup_type_to_string(groups[i].type), avg_str, stddev_str, wal_str);
+	}
+	printf("\n");
 
 	for (int t = 0; t < track_count; t++)
 	{
@@ -427,11 +485,25 @@ cmd_stat_main(int argc, char **argv)
 		g->count++;
 		uint64_t size = b->data_bytes + b->wal_bytes;
 		g->total_bytes += size;
+		g->sum_sizes_sq += size * size;
+		g->total_wal_bytes += b->wal_bytes;
+
+		if (b->start_time > 0)
+		{
+			if (b->start_time < g->min_time)
+				g->min_time = b->start_time;
+			if (b->start_time > g->max_time)
+				g->max_time = b->start_time;
+		}
 
 		if (b->end_time > b->start_time)
 		{
-			g->total_duration += (int64_t)(b->end_time - b->start_time);
-			g->duration_count++;
+			int64_t duration = (int64_t)(b->end_time - b->start_time);
+			if (duration < 48 * 3600)
+			{
+				g->total_duration += duration;
+				g->duration_count++;
+			}
 		}
 		if (b->status == BACKUP_STATUS_OK)
 			g->ok_count++;
@@ -478,8 +550,8 @@ cmd_stat_main(int argc, char **argv)
 				printf(" / %s", g->instance_name);
 			printf("%s\n", rst);
 
-			printf("  Type      Count    Total Size   Avg Size  Avg Duration   OK%%\n");
-			printf("  ──────────────────────────────────────────────────────────────\n");
+			printf("  Type            Count    Total Size   Avg Size   Avg Duration   OK%%\n");
+			printf("  ───────────────────────────────────────────────────────────────────\n");
 			current_tool = g->tool;
 			str_copy(current_instance, g->instance_name, sizeof(current_instance));
 		}
@@ -496,7 +568,7 @@ cmd_stat_main(int argc, char **argv)
 		snprintf(ok_pct_str, sizeof(ok_pct_str), "%d%%",
 				 g->count > 0 ? (g->ok_count * 100 / g->count) : 0);
 
-		printf("  %-8s  %5d   %10s   %9s   %11s  %4s\n",
+		printf("  %-12s  %5d   %10s   %9s   %13s  %3s\n",
 			   backup_type_to_string(g->type),
 			   g->count,
 			   total_str,
