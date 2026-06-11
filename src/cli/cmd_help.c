@@ -271,9 +271,8 @@ print_stat_usage(void)
 	printf("                         Used for planning WAL archive storage capacity\n\n");
 
 	printf("DATABASE GROWTH TREND SECTION:\n");
-	printf("  Growth analysis      - Average size change between consecutive FULL backups\n");
-	printf("                         Shows min/max growth range and number of intervals\n");
-	printf("                         Used for capacity planning (e.g., 'need +100 MB storage per day')\n\n");
+	printf("  FULL backup sizes    - Average, minimum, and maximum size of FULL backups\n");
+	printf("                         Used for capacity planning and understanding database size range\n\n");
 
 	printf("INCREMENTAL EFFICIENCY SECTION:\n");
 	printf("  Efficiency ratios    - Average incremental backup size as %% of FULL backup size\n");

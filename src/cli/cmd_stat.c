@@ -164,22 +164,6 @@ format_duration(double seconds, char *buf, size_t size)
 		snprintf(buf, size, "%ds", secs);
 }
 
-static void
-format_signed_bytes(int64_t bytes, char *buf, size_t size)
-{
-	const char *sign = (bytes < 0) ? "-" : "+";
-	uint64_t abs_bytes = (bytes < 0) ? -bytes : bytes;
-
-	if (abs_bytes >= (uint64_t)1024 * 1024 * 1024)
-		snprintf(buf, size, "%s%.1f GB", sign, abs_bytes / (1024.0 * 1024.0 * 1024.0));
-	else if (abs_bytes >= (uint64_t)1024 * 1024)
-		snprintf(buf, size, "%s%.1f MB", sign, abs_bytes / (1024.0 * 1024.0));
-	else if (abs_bytes >= 1024)
-		snprintf(buf, size, "%s%.1f KB", sign, abs_bytes / 1024.0);
-	else
-		snprintf(buf, size, "%s%llu B", sign, (unsigned long long)abs_bytes);
-}
-
 static uint64_t __attribute__((unused))
 calculate_stddev(StatGroup *g)
 {
@@ -322,32 +306,36 @@ print_growth_efficiency(BackupInfo *backups, StatGroup *groups, int group_count)
 		}
 		else if (track->full_count == 1)
 		{
-			printf("    N/A (need ≥2 FULL backups)\n\n");
+			char size_str[32];
+			format_bytes(track->fulls[0].data_bytes, size_str, sizeof(size_str));
+			printf("    Only 1 FULL backup: %s\n\n", size_str);
+			continue;
 		}
-		else
+
+		/* Calculate min/max/avg of FULL backup sizes */
+		uint64_t min_size = track->fulls[0].data_bytes;
+		uint64_t max_size = track->fulls[0].data_bytes;
+		uint64_t sum_size = 0;
+
+		for (int i = 0; i < track->full_count; i++)
 		{
-			int64_t sum_growth = 0, min_growth = 0, max_growth = 0;
-			for (int i = 1; i < track->full_count; i++)
-			{
-				int64_t growth = (int64_t)track->fulls[i].data_bytes -
-								 (int64_t)track->fulls[i - 1].data_bytes;
-				sum_growth += growth;
-				if (i == 1 || growth < min_growth)
-					min_growth = growth;
-				if (i == 1 || growth > max_growth)
-					max_growth = growth;
-			}
-
-			char avg_str[32], min_str[32], max_str[32];
-			double avg_growth = (double)sum_growth / (track->full_count - 1);
-			format_signed_bytes((int64_t)avg_growth, avg_str, sizeof(avg_str));
-			format_signed_bytes(min_growth, min_str, sizeof(min_str));
-			format_signed_bytes(max_growth, max_str, sizeof(max_str));
-
-			printf("    avg %s  (min %s .. max %s, %d intervals)\n",
-				   avg_str, min_str, max_str, track->full_count - 1);
-			printf("\n");
+			uint64_t size = track->fulls[i].data_bytes;
+			sum_size += size;
+			if (size < min_size)
+				min_size = size;
+			if (size > max_size)
+				max_size = size;
 		}
+
+		uint64_t avg_size = sum_size / track->full_count;
+
+		char avg_str[32], min_str[32], max_str[32];
+		format_bytes(avg_size, avg_str, sizeof(avg_str));
+		format_bytes(min_size, min_str, sizeof(min_str));
+		format_bytes(max_size, max_str, sizeof(max_str));
+
+		printf("    FULL:  avg %s, min %s, max %s\n\n",
+			   avg_str, min_str, max_str);
 	}
 
 	/* INCREMENTAL EFFICIENCY */
