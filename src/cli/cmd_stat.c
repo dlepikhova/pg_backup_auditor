@@ -32,9 +32,12 @@
 #include <getopt.h>
 #include <math.h>
 #include <limits.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 typedef struct {
 	char *backup_dir;
+	char *wal_archive;
 } StatOptions;
 
 typedef struct {
@@ -68,6 +71,7 @@ static void
 init_options(StatOptions *opts)
 {
 	opts->backup_dir = NULL;
+	opts->wal_archive = NULL;
 }
 
 static int
@@ -78,12 +82,13 @@ parse_arguments(int argc, char **argv, StatOptions *opts)
 	bool backup_dir_seen = false;
 
 	static struct option long_options[] = {
-		{"backup-dir", required_argument, 0, 'B'},
-		{"help",       no_argument,       0, 'h'},
+		{"backup-dir",   required_argument, 0, 'B'},
+		{"wal-archive",  required_argument, 0, 'W'},
+		{"help",         no_argument,       0, 'h'},
 		{0, 0, 0, 0}
 	};
 
-	while ((c = getopt_long(argc, argv, "B:h",
+	while ((c = getopt_long(argc, argv, "B:W:h",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -93,6 +98,9 @@ parse_arguments(int argc, char **argv, StatOptions *opts)
 					return EXIT_INVALID_ARGUMENTS;
 				opts->backup_dir = optarg;
 				backup_dir_seen = true;
+				break;
+			case 'W':
+				opts->wal_archive = optarg;
 				break;
 			case 'h':
 				print_stat_usage();
@@ -235,6 +243,49 @@ compare_full_entries(const void *a, const void *b)
 	const FullEntry *fa = (const FullEntry *)a;
 	const FullEntry *fb = (const FullEntry *)b;
 	return (int)(fa->start_time - fb->start_time);
+}
+
+typedef struct {
+	uint64_t total_wal;
+	time_t min_time;
+	time_t max_time;
+} WalArchiveStats;
+
+static WalArchiveStats __attribute__((unused))
+analyze_wal_archive(const char *wal_archive_path)
+{
+	WalArchiveStats stats = {0, LLONG_MAX, 0};
+
+	if (!wal_archive_path || !is_directory(wal_archive_path))
+		return stats;
+
+	DIR *dir = opendir(wal_archive_path);
+	if (!dir)
+		return stats;
+
+	struct dirent *entry;
+	while ((entry = readdir(dir)) != NULL)
+	{
+		if (entry->d_name[0] == '.')
+			continue;
+		if (strstr(entry->d_name, ".backup") != NULL)
+			continue;
+
+		char full_path[PATH_MAX];
+		struct stat st;
+		path_join(full_path, sizeof(full_path), wal_archive_path, entry->d_name);
+
+		if (stat(full_path, &st) == 0 && S_ISREG(st.st_mode))
+		{
+			stats.total_wal += st.st_size;
+			if (st.st_mtime < stats.min_time)
+				stats.min_time = st.st_mtime;
+			if (st.st_mtime > stats.max_time)
+				stats.max_time = st.st_mtime;
+		}
+	}
+	closedir(dir);
+	return stats;
 }
 
 static void
@@ -655,65 +706,114 @@ cmd_stat_main(int argc, char **argv)
 		format_bytes(total_bytes, total_str, sizeof(total_str));
 		printf("  TOTAL            %5d   %s\n", total_count, total_str);
 
-		/* WAL Archive Volume by tool and instance */
+		/* WAL Archive Volume by tool and instance (from backups) */
 		printf("\n  WAL Archive Volume:\n");
 
-		BackupTool prev_tool = (BackupTool)-1;
-		for (int i = 0; i < group_count; i++)
-		{
-			/* Print tool header when switching tools */
-			if (groups[i].tool != prev_tool)
-			{
-				uint64_t tool_total_wal = 0;
-				int tool_days = 0;
+		typedef struct {
+			BackupTool tool;
+			char instance_name[64];
+			uint64_t total_wal;
+			time_t min_time;
+			time_t max_time;
+		} ToolInstanceWal;
 
-				/* Calculate total WAL and time span for this tool */
-				for (int j = 0; j < group_count; j++)
+		ToolInstanceWal wals[20];
+		int wal_count = 0;
+
+		/* Collect WAL stats from backups (only from backups with WAL) */
+		for (BackupInfo *b = backups; b != NULL; b = b->next)
+		{
+			if (b->wal_bytes == 0)
+				continue;  /* Skip backups without WAL */
+
+			ToolInstanceWal *entry = NULL;
+			for (int i = 0; i < wal_count; i++)
+			{
+				if (wals[i].tool == b->tool && strcmp(wals[i].instance_name, b->instance_name) == 0)
 				{
-					if (groups[j].tool == groups[i].tool &&
-						groups[j].max_time > groups[j].min_time &&
-						groups[j].min_time != LLONG_MAX)
+					entry = &wals[i];
+					break;
+				}
+			}
+
+			if (entry == NULL)
+			{
+				if (wal_count >= 20)
+					continue;
+				entry = &wals[wal_count];
+				entry->tool = b->tool;
+				str_copy(entry->instance_name, b->instance_name, sizeof(entry->instance_name));
+				entry->total_wal = 0;
+				entry->min_time = LLONG_MAX;
+				entry->max_time = 0;
+				wal_count++;
+			}
+
+			entry->total_wal += b->wal_bytes;
+			if (b->start_time > 0)
+			{
+				if (b->start_time < entry->min_time)
+					entry->min_time = b->start_time;
+				if (b->start_time > entry->max_time)
+					entry->max_time = b->start_time;
+			}
+		}
+
+		/* Print WAL stats grouped by tool */
+		BackupTool prev_tool = (BackupTool)-1;
+		for (int i = 0; i < wal_count; i++)
+		{
+			if (wals[i].tool != prev_tool)
+			{
+				/* Calculate tool totals */
+				uint64_t tool_total_wal = 0;
+				time_t tool_min_time = LLONG_MAX;
+				time_t tool_max_time = 0;
+
+				for (int j = 0; j < wal_count; j++)
+				{
+					if (wals[j].tool == wals[i].tool)
 					{
-						tool_total_wal += groups[j].total_wal_bytes;
-						int this_days = (groups[j].max_time - groups[j].min_time) / 86400;
-						if (this_days == 0)
-							this_days = 1;
-						if (this_days > tool_days)
-							tool_days = this_days;
+						tool_total_wal += wals[j].total_wal;
+						if (wals[j].min_time < tool_min_time)
+							tool_min_time = wals[j].min_time;
+						if (wals[j].max_time > tool_max_time)
+							tool_max_time = wals[j].max_time;
 					}
 				}
 
-				if (tool_total_wal > 0)
+				if (tool_total_wal > 0 && tool_max_time > tool_min_time)
 				{
-					uint64_t tool_wal_per_day = tool_total_wal / (tool_days > 0 ? tool_days : 1);
-					char tool_wal_str[32];
+					time_t days = (tool_max_time - tool_min_time) / 86400;
+					if (days == 0)
+						days = 1;
+					uint64_t tool_wal_per_day = tool_total_wal / days;
+					char tool_wal_str[32], total_wal_str[32];
 					format_bytes(tool_wal_per_day, tool_wal_str, sizeof(tool_wal_str));
-					printf("    %s: %s/day\n", backup_tool_to_string(groups[i].tool), tool_wal_str);
+					format_bytes(tool_total_wal, total_wal_str, sizeof(total_wal_str));
+
+					printf("    %s: %s/day\n", backup_tool_to_string(wals[i].tool), tool_wal_str);
 
 					/* Print instances for this tool */
-					for (int j = 0; j < group_count; j++)
+					for (int j = 0; j < wal_count; j++)
 					{
-						if (groups[j].tool == groups[i].tool &&
-							groups[j].max_time > groups[j].min_time &&
-							groups[j].min_time != LLONG_MAX)
+						if (wals[j].tool == wals[i].tool && wals[j].total_wal > 0 &&
+							wals[j].max_time > wals[j].min_time &&
+							wals[j].instance_name[0] != '\0' &&
+							strcmp(wals[j].instance_name, "localhost") != 0)
 						{
-							time_t days = (groups[j].max_time - groups[j].min_time) / 86400;
+							time_t days = (wals[j].max_time - wals[j].min_time) / 86400;
 							if (days == 0)
 								days = 1;
-							uint64_t wal_per_day = groups[j].total_wal_bytes / days;
-
-							if (groups[j].instance_name[0] != '\0' &&
-								strcmp(groups[j].instance_name, "localhost") != 0)
-							{
-								char wal_str[32];
-								format_bytes(wal_per_day, wal_str, sizeof(wal_str));
-								printf("      %s: %s/day\n", groups[j].instance_name, wal_str);
-							}
+							uint64_t wal_per_day = wals[j].total_wal / days;
+							char wal_str[32];
+							format_bytes(wal_per_day, wal_str, sizeof(wal_str));
+							printf("      %s: %s/day\n", wals[j].instance_name, wal_str);
 						}
 					}
 				}
 
-				prev_tool = groups[i].tool;
+				prev_tool = wals[i].tool;
 			}
 		}
 	}
