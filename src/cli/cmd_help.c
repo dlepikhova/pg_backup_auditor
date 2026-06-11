@@ -265,14 +265,20 @@ print_stat_usage(void)
 	printf("  Avg Duration - Average backup duration (h/m/s), N/A if no valid duration\n");
 	printf("  OK%%          - Percentage of backups with OK status\n\n");
 
-	printf("GROWTH & EFFICIENCY SECTION:\n");
-	printf("  Per-type statistics    - Average backup size with standard deviation (±σ) and WAL volume per day\n");
-	printf("                           σ is baseline for anomaly detection (outliers beyond ±2σ)\n");
-	printf("                           WAL/day helps plan WAL archive storage capacity\n");
-	printf("  Database growth (FULL) - Average size change between consecutive FULL backups\n");
-	printf("                           Used for capacity planning (e.g., 'need +100 MB storage per day')\n");
-	printf("  Incremental efficiency - Average incremental backup size as %% of FULL backup size\n");
-	printf("                           Lower %% means efficient incrementals; higher %% may indicate issue\n\n");
+	printf("STORAGE SECTION:\n");
+	printf("  Count by status      - Number of backups in each status (OK, WARNING, ERROR, etc.)\n");
+	printf("  WAL Archive Volume   - Daily WAL archive volume by backup tool and instance\n");
+	printf("                         Used for planning WAL archive storage capacity\n\n");
+
+	printf("DATABASE GROWTH TREND SECTION:\n");
+	printf("  Growth analysis      - Average size change between consecutive FULL backups\n");
+	printf("                         Shows min/max growth range and number of intervals\n");
+	printf("                         Used for capacity planning (e.g., 'need +100 MB storage per day')\n\n");
+
+	printf("INCREMENTAL EFFICIENCY SECTION:\n");
+	printf("  Efficiency ratios    - Average incremental backup size as %% of FULL backup size\n");
+	printf("                         Lower %% means efficient incrementals; higher %% may indicate issue\n");
+	printf("                         Shows avg size for context\n\n");
 
 	printf("EXAMPLES:\n");
 	printf("  # Get statistics for all backups\n");

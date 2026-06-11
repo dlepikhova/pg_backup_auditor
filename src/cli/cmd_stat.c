@@ -180,7 +180,7 @@ format_signed_bytes(int64_t bytes, char *buf, size_t size)
 		snprintf(buf, size, "%s%llu B", sign, (unsigned long long)abs_bytes);
 }
 
-static uint64_t
+static uint64_t __attribute__((unused))
 calculate_stddev(StatGroup *g)
 {
 	if (g->count < 2)
@@ -300,43 +300,10 @@ print_growth_efficiency(BackupInfo *backups, StatGroup *groups, int group_count)
 	printf("\n");
 	const char *col = use_color ? COLOR_CYAN : "";
 	const char *rst = use_color ? COLOR_RESET : "";
-	printf("%sGROWTH & EFFICIENCY%s\n", col, rst);
+
+	/* DATABASE GROWTH TREND */
+	printf("%sDATABASE GROWTH TREND%s\n", col, rst);
 	printf("  ──────────────────────────────────────────────────────────\n\n");
-
-	printf("  Per-type statistics (size with std dev, WAL):\n");
-	for (int i = 0; i < group_count; i++)
-	{
-		if (i == 0 || groups[i].tool != groups[i - 1].tool ||
-			strcmp(groups[i].instance_name, groups[i - 1].instance_name) != 0)
-		{
-			printf("\n    %s", backup_tool_to_string(groups[i].tool));
-			if (groups[i].instance_name[0] != '\0' &&
-				strcmp(groups[i].instance_name, "localhost") != 0)
-				printf(" / %s", groups[i].instance_name);
-			printf("\n");
-		}
-
-		uint64_t avg = groups[i].total_bytes / groups[i].count;
-		uint64_t stddev = calculate_stddev(&groups[i]);
-
-		char avg_str[32], stddev_str[32], wal_str[32];
-		format_bytes(avg, avg_str, sizeof(avg_str));
-		format_bytes(stddev, stddev_str, sizeof(stddev_str));
-
-		uint64_t wal_per_day = 0;
-		if (groups[i].max_time > groups[i].min_time && groups[i].min_time != LLONG_MAX)
-		{
-			time_t days = (groups[i].max_time - groups[i].min_time) / 86400;
-			if (days == 0)
-				days = 1;
-			wal_per_day = groups[i].total_wal_bytes / days;
-		}
-		format_bytes(wal_per_day, wal_str, sizeof(wal_str));
-
-		printf("      %s: %s avg, ±%s σ   %s WAL/day\n",
-			   backup_type_to_string(groups[i].type), avg_str, stddev_str, wal_str);
-	}
-	printf("\n");
 
 	for (int t = 0; t < track_count; t++)
 	{
@@ -355,7 +322,7 @@ print_growth_efficiency(BackupInfo *backups, StatGroup *groups, int group_count)
 		}
 		else if (track->full_count == 1)
 		{
-			printf("    FULL growth:  N/A (need ≥2 FULL backups)\n");
+			printf("    N/A (need ≥2 FULL backups)\n\n");
 		}
 		else
 		{
@@ -377,9 +344,19 @@ print_growth_efficiency(BackupInfo *backups, StatGroup *groups, int group_count)
 			format_signed_bytes(min_growth, min_str, sizeof(min_str));
 			format_signed_bytes(max_growth, max_str, sizeof(max_str));
 
-			printf("    FULL growth:  avg %s   (min %s .. max %s, %d intervals)\n",
+			printf("    avg %s  (min %s .. max %s, %d intervals)\n",
 				   avg_str, min_str, max_str, track->full_count - 1);
+			printf("\n");
 		}
+	}
+
+	/* INCREMENTAL EFFICIENCY */
+	printf("%sINCREMENTAL EFFICIENCY%s\n", col, rst);
+	printf("  ──────────────────────────────────────────────────────────\n\n");
+
+	for (int t = 0; t < track_count; t++)
+	{
+		GrowthTrack *track = &tracks[t];
 
 		StatGroup *full_group = NULL;
 		for (int i = 0; i < group_count; i++)
@@ -394,10 +371,12 @@ print_growth_efficiency(BackupInfo *backups, StatGroup *groups, int group_count)
 		}
 
 		if (full_group == NULL || full_group->count == 0)
-		{
-			printf("    (no incremental backups)\n\n");
 			continue;
-		}
+
+		printf("  %s", backup_tool_to_string(track->tool));
+		if (track->instance_name[0] != '\0' && strcmp(track->instance_name, "localhost") != 0)
+			printf(" / %s", track->instance_name);
+		printf("\n");
 
 		uint64_t avg_full = full_group->total_bytes / full_group->count;
 		bool has_incr = false;
@@ -410,6 +389,9 @@ print_growth_efficiency(BackupInfo *backups, StatGroup *groups, int group_count)
 				ig->type != BACKUP_TYPE_FULL && ig->count > 0)
 			{
 				uint64_t avg_incr = ig->total_bytes / ig->count;
+				if (avg_incr == 0)
+					continue;
+
 				int pct = (avg_full > 0) ? (int)(avg_incr * 100 / avg_full) : 0;
 
 				char avg_incr_str[32], avg_full_str[32];
@@ -684,6 +666,68 @@ cmd_stat_main(int argc, char **argv)
 		char total_str[32];
 		format_bytes(total_bytes, total_str, sizeof(total_str));
 		printf("  TOTAL            %5d   %s\n", total_count, total_str);
+
+		/* WAL Archive Volume by tool and instance */
+		printf("\n  WAL Archive Volume:\n");
+
+		BackupTool prev_tool = (BackupTool)-1;
+		for (int i = 0; i < group_count; i++)
+		{
+			/* Print tool header when switching tools */
+			if (groups[i].tool != prev_tool)
+			{
+				uint64_t tool_total_wal = 0;
+				int tool_days = 0;
+
+				/* Calculate total WAL and time span for this tool */
+				for (int j = 0; j < group_count; j++)
+				{
+					if (groups[j].tool == groups[i].tool &&
+						groups[j].max_time > groups[j].min_time &&
+						groups[j].min_time != LLONG_MAX)
+					{
+						tool_total_wal += groups[j].total_wal_bytes;
+						int this_days = (groups[j].max_time - groups[j].min_time) / 86400;
+						if (this_days == 0)
+							this_days = 1;
+						if (this_days > tool_days)
+							tool_days = this_days;
+					}
+				}
+
+				if (tool_total_wal > 0)
+				{
+					uint64_t tool_wal_per_day = tool_total_wal / (tool_days > 0 ? tool_days : 1);
+					char tool_wal_str[32];
+					format_bytes(tool_wal_per_day, tool_wal_str, sizeof(tool_wal_str));
+					printf("    %s: %s/day\n", backup_tool_to_string(groups[i].tool), tool_wal_str);
+
+					/* Print instances for this tool */
+					for (int j = 0; j < group_count; j++)
+					{
+						if (groups[j].tool == groups[i].tool &&
+							groups[j].max_time > groups[j].min_time &&
+							groups[j].min_time != LLONG_MAX)
+						{
+							time_t days = (groups[j].max_time - groups[j].min_time) / 86400;
+							if (days == 0)
+								days = 1;
+							uint64_t wal_per_day = groups[j].total_wal_bytes / days;
+
+							if (groups[j].instance_name[0] != '\0' &&
+								strcmp(groups[j].instance_name, "localhost") != 0)
+							{
+								char wal_str[32];
+								format_bytes(wal_per_day, wal_str, sizeof(wal_str));
+								printf("      %s: %s/day\n", groups[j].instance_name, wal_str);
+							}
+						}
+					}
+				}
+
+				prev_tool = groups[i].tool;
+			}
+		}
 	}
 
 	/* Growth & Efficiency analysis */
