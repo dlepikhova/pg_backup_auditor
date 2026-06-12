@@ -256,6 +256,8 @@ print_stat_usage(void)
 
 	printf("OPTIONS:\n");
 	printf("  -B, --backup-dir=PATH    Path to backup directory (required)\n");
+	printf("  -W, --wal-archive=PATH   Path to WAL archive (optional, for pg_probackup)\n");
+	printf("                           If not specified, auto-detected from backup directory\n");
 	printf("  -h, --help               Show this help message\n\n");
 
 	printf("STATISTICS BY GROUP:\n");

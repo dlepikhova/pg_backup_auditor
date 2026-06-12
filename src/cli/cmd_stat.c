@@ -359,26 +359,37 @@ print_growth_efficiency(BackupInfo *backups, StatGroup *groups, int group_count)
 		{
 			char size_str[32];
 			format_bytes(track->fulls[0].data_bytes, size_str, sizeof(size_str));
-			printf("    Only 1 FULL backup: %s\n\n", size_str);
+			printf("    Only 1 valid FULL backup: %s\n\n", size_str);
 			continue;
 		}
 
-		/* Calculate min/max/avg of FULL backup sizes */
-		uint64_t min_size = track->fulls[0].data_bytes;
-		uint64_t max_size = track->fulls[0].data_bytes;
+		/* Calculate min/max/avg of FULL backup sizes (excluding zero-size) */
+		uint64_t min_size = UINT64_MAX;
+		uint64_t max_size = 0;
 		uint64_t sum_size = 0;
+		int valid_count = 0;
 
 		for (int i = 0; i < track->full_count; i++)
 		{
 			uint64_t size = track->fulls[i].data_bytes;
-			sum_size += size;
-			if (size < min_size)
-				min_size = size;
-			if (size > max_size)
-				max_size = size;
+			if (size > 0)
+			{
+				sum_size += size;
+				if (size < min_size)
+					min_size = size;
+				if (size > max_size)
+					max_size = size;
+				valid_count++;
+			}
 		}
 
-		uint64_t avg_size = sum_size / track->full_count;
+		if (valid_count == 0)
+		{
+			printf("    (no FULL backups with data)\n\n");
+			continue;
+		}
+
+		uint64_t avg_size = sum_size / valid_count;
 
 		char avg_str[32], min_str[32], max_str[32];
 		format_bytes(avg_size, avg_str, sizeof(avg_str));
@@ -706,7 +717,7 @@ cmd_stat_main(int argc, char **argv)
 		format_bytes(total_bytes, total_str, sizeof(total_str));
 		printf("  TOTAL            %5d   %s\n", total_count, total_str);
 
-		/* WAL Archive Volume by tool and instance (from backups) */
+		/* WAL Archive Volume by tool and instance (from backups or archives) */
 		printf("\n  WAL Archive Volume:\n");
 
 		typedef struct {
@@ -715,10 +726,99 @@ cmd_stat_main(int argc, char **argv)
 			uint64_t total_wal;
 			time_t min_time;
 			time_t max_time;
+			bool from_archive;
 		} ToolInstanceWal;
 
 		ToolInstanceWal wals[20];
 		int wal_count = 0;
+
+		/* For pg_probackup: try to find and analyze WAL archives */
+		typedef struct {
+			char instance_name[64];
+			WalArchiveStats archive_stats;
+		} ProbackupArchive;
+
+		ProbackupArchive pb_archives[20];
+		int pb_archive_count = 0;
+
+		for (BackupInfo *b = backups; b != NULL; b = b->next)
+		{
+			if (b->tool != BACKUP_TOOL_PG_PROBACKUP)
+				continue;
+
+			/* Check if we already processed this instance */
+			bool found = false;
+			for (int i = 0; i < pb_archive_count; i++)
+			{
+				if (strcmp(pb_archives[i].instance_name, b->instance_name) == 0)
+				{
+					found = true;
+					break;
+				}
+			}
+			if (found)
+				continue;
+
+			/* Try to find WAL archive for this instance */
+			char wal_archive_path[PATH_MAX];
+
+			/* First, try user-provided path */
+			if (opts.wal_archive && is_directory(opts.wal_archive))
+			{
+				snprintf(wal_archive_path, sizeof(wal_archive_path), "%s", opts.wal_archive);
+			}
+			else
+			{
+				/* Try to find automatically from backup path
+				 * backup_path is like: /path/to/catalog/backups/{instance}/{backup_id}
+				 * WAL archive is at: /path/to/catalog/wal/{instance}
+				 */
+				char catalog_base[PATH_MAX];
+				snprintf(catalog_base, sizeof(catalog_base), "%s", b->backup_path);
+
+				/* Remove backup ID (last component) */
+				char *last_slash = strrchr(catalog_base, '/');
+				if (last_slash)
+					*last_slash = '\0';
+
+				/* Remove instance name (next-to-last component) */
+				last_slash = strrchr(catalog_base, '/');
+				if (last_slash)
+					*last_slash = '\0';
+
+				/* Now catalog_base is /path/to/catalog/backups */
+				/* Navigate to /path/to/catalog/wal/{instance} */
+				char wal_base[PATH_MAX];
+				last_slash = strrchr(catalog_base, '/');
+				if (last_slash)
+				{
+					*last_slash = '\0';  /* catalog_base is now /path/to/catalog */
+					path_join(wal_base, sizeof(wal_base), catalog_base, "wal");
+					path_join(wal_archive_path, sizeof(wal_archive_path), wal_base, b->instance_name);
+				}
+				else
+				{
+					/* Fallback: use backup_dir structure */
+					char temp_base[PATH_MAX];
+					path_join(temp_base, sizeof(temp_base), opts.backup_dir, "backups");
+					path_join(wal_base, sizeof(wal_base), temp_base, "wal");
+					path_join(wal_archive_path, sizeof(wal_archive_path), wal_base, b->instance_name);
+				}
+			}
+
+			/* Analyze archive if found */
+			if (is_directory(wal_archive_path))
+			{
+				if (pb_archive_count < 20)
+				{
+					WalArchiveStats stats = analyze_wal_archive(wal_archive_path);
+					pb_archives[pb_archive_count].archive_stats = stats;
+					str_copy(pb_archives[pb_archive_count].instance_name, b->instance_name,
+							 sizeof(pb_archives[pb_archive_count].instance_name));
+					pb_archive_count++;
+				}
+			}
+		}
 
 		/* Collect WAL stats from backups (only from backups with WAL) */
 		for (BackupInfo *b = backups; b != NULL; b = b->next)
@@ -746,6 +846,7 @@ cmd_stat_main(int argc, char **argv)
 				entry->total_wal = 0;
 				entry->min_time = LLONG_MAX;
 				entry->max_time = 0;
+				entry->from_archive = false;
 				wal_count++;
 			}
 
@@ -757,6 +858,52 @@ cmd_stat_main(int argc, char **argv)
 				if (b->start_time > entry->max_time)
 					entry->max_time = b->start_time;
 			}
+		}
+
+		/* Use discovered WAL archives if they provide better data than backup metadata
+		 * (for pg_probackup: backups may have wal_bytes but single timestamp, archives have time range)
+		 */
+		for (int i = 0; i < pb_archive_count; i++)
+		{
+			if (pb_archives[i].archive_stats.total_wal == 0)
+				continue;
+
+			/* Look for existing entry for this instance */
+			for (int j = 0; j < wal_count; j++)
+			{
+				if (wals[j].tool == BACKUP_TOOL_PG_PROBACKUP &&
+					strcmp(wals[j].instance_name, pb_archives[i].instance_name) == 0)
+				{
+					/* Found existing entry - check if archive has better time range */
+					if (pb_archives[i].archive_stats.max_time > pb_archives[i].archive_stats.min_time &&
+						(wals[j].max_time <= wals[j].min_time ||
+						 (pb_archives[i].archive_stats.max_time - pb_archives[i].archive_stats.min_time) >
+						 (wals[j].max_time - wals[j].min_time)))
+					{
+						wals[j].total_wal = pb_archives[i].archive_stats.total_wal;
+						wals[j].min_time = pb_archives[i].archive_stats.min_time;
+						wals[j].max_time = pb_archives[i].archive_stats.max_time;
+						wals[j].from_archive = true;
+					}
+					goto next_archive;
+				}
+			}
+
+			/* Not found - add new entry if space available */
+			if (wal_count < 20)
+			{
+				ToolInstanceWal *entry = &wals[wal_count];
+				entry->tool = BACKUP_TOOL_PG_PROBACKUP;
+				str_copy(entry->instance_name, pb_archives[i].instance_name, sizeof(entry->instance_name));
+				entry->total_wal = pb_archives[i].archive_stats.total_wal;
+				entry->min_time = pb_archives[i].archive_stats.min_time;
+				entry->max_time = pb_archives[i].archive_stats.max_time;
+				entry->from_archive = true;
+				wal_count++;
+			}
+
+			next_archive:
+			(void)0;  /* Dummy statement for label */
 		}
 
 		/* Print WAL stats grouped by tool */
@@ -798,17 +945,54 @@ cmd_stat_main(int argc, char **argv)
 					for (int j = 0; j < wal_count; j++)
 					{
 						if (wals[j].tool == wals[i].tool && wals[j].total_wal > 0 &&
-							wals[j].max_time > wals[j].min_time &&
 							wals[j].instance_name[0] != '\0' &&
 							strcmp(wals[j].instance_name, "localhost") != 0)
 						{
-							time_t days = (wals[j].max_time - wals[j].min_time) / 86400;
-							if (days == 0)
-								days = 1;
-							uint64_t wal_per_day = wals[j].total_wal / days;
-							char wal_str[32];
-							format_bytes(wal_per_day, wal_str, sizeof(wal_str));
-							printf("      %s: %s/day\n", wals[j].instance_name, wal_str);
+							/* Check if we have WAL archive for pg_probackup */
+							ProbackupArchive *archive = NULL;
+							if (wals[j].tool == BACKUP_TOOL_PG_PROBACKUP)
+							{
+								for (int k = 0; k < pb_archive_count; k++)
+								{
+									if (strcmp(pb_archives[k].instance_name, wals[j].instance_name) == 0 &&
+										pb_archives[k].archive_stats.total_wal > 0)
+									{
+										archive = &pb_archives[k];
+										break;
+									}
+								}
+							}
+
+							uint64_t wal_per_day = 0;
+							if (archive && archive->archive_stats.max_time > archive->archive_stats.min_time)
+							{
+								time_t days = (archive->archive_stats.max_time - archive->archive_stats.min_time) / 86400;
+								if (days == 0)
+									days = 1;
+								wal_per_day = archive->archive_stats.total_wal / days;
+							}
+							else if (wals[j].max_time > wals[j].min_time)
+							{
+								time_t days = (wals[j].max_time - wals[j].min_time) / 86400;
+								if (days == 0)
+									days = 1;
+								wal_per_day = wals[j].total_wal / days;
+							}
+							else if (wals[j].total_wal > 0 && tool_max_time > tool_min_time)
+							{
+								/* No per-instance time range, use tool total period */
+								time_t days = (tool_max_time - tool_min_time) / 86400;
+								if (days == 0)
+									days = 1;
+								wal_per_day = wals[j].total_wal / days;
+							}
+
+							if (wal_per_day > 0)
+							{
+								char wal_str[32];
+								format_bytes(wal_per_day, wal_str, sizeof(wal_str));
+								printf("      %s: %s/day\n", wals[j].instance_name, wal_str);
+							}
 						}
 					}
 				}
