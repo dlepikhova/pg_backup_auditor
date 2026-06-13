@@ -24,6 +24,7 @@
 #include "cmd_help.h"
 #include "arg_parser.h"
 #include "adapter.h"
+#include "backup_chain.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -153,152 +154,6 @@ validate_options(const CheckOptions *opts)
 	return EXIT_SUCCESS;
 }
 
-/* ------------------------------------------------------------------ *
- * Chain grouping helpers
- * ------------------------------------------------------------------ */
-
-typedef struct {
-	BackupInfo  *root;      /* Root FULL backup; NULL = orphaned group */
-	BackupInfo **members;   /* Sorted by start_time, oldest first */
-	int          count;
-	int          capacity;
-} BackupChain;
-
-static BackupInfo *
-find_backup_in_list(BackupInfo *list, const char *id)
-{
-	for (BackupInfo *b = list; b != NULL; b = b->next)
-		if (strcmp(b->backup_id, id) == 0)
-			return b;
-	return NULL;
-}
-
-/* Walk up parent links to find the root FULL backup */
-static BackupInfo *
-find_chain_root(BackupInfo *backup, BackupInfo *all_backups)
-{
-	BackupInfo *cur = backup;
-	for (int depth = 0; depth < 1000; depth++)
-	{
-		if (cur->type == BACKUP_TYPE_FULL)
-			return cur;
-		if (cur->parent_backup_id[0] == '\0')
-			return NULL;
-		cur = find_backup_in_list(all_backups, cur->parent_backup_id);
-		if (cur == NULL)
-			return NULL;
-	}
-	return NULL;  /* cycle guard */
-}
-
-static int
-compare_backup_by_time(const void *a, const void *b)
-{
-	time_t ta = (*(const BackupInfo **)a)->start_time;
-	time_t tb = (*(const BackupInfo **)b)->start_time;
-	return (ta > tb) - (ta < tb);
-}
-
-static bool
-chain_append(BackupChain *chain, BackupInfo *backup)
-{
-	if (chain->count == chain->capacity)
-	{
-		int nc = chain->capacity ? chain->capacity * 2 : 8;
-		BackupInfo **nm = realloc(chain->members, nc * sizeof(*nm));
-		if (nm == NULL)
-			return false;
-		chain->members = nm;
-		chain->capacity = nc;
-	}
-	chain->members[chain->count++] = backup;
-	return true;
-}
-
-/*
- * build_chains — group all_backups by chain root.
- *
- * Each FULL backup starts a new chain.  Incrementals are assigned to the
- * chain of their root FULL.  Backups with no reachable FULL ancestor go
- * into the orphaned bucket (root = NULL).
- *
- * Returns a calloc'd array of BackupChain; *nchains is set to the length.
- * The orphaned bucket is always last; it is included only if non-empty.
- */
-static BackupChain *
-build_chains(BackupInfo *all_backups, int *nchains)
-{
-	int full_count = 0;
-	for (BackupInfo *b = all_backups; b != NULL; b = b->next)
-		if (b->type == BACKUP_TYPE_FULL)
-			full_count++;
-
-	BackupChain *chains = calloc(full_count + 1, sizeof(BackupChain));
-	if (chains == NULL)
-		return NULL;
-
-	int ci = 0;
-
-	/* One chain per FULL */
-	for (BackupInfo *b = all_backups; b != NULL; b = b->next)
-	{
-		if (b->type != BACKUP_TYPE_FULL)
-			continue;
-		chains[ci].root = b;
-		chain_append(&chains[ci], b);
-		ci++;
-	}
-
-	/* Assign non-FULL backups to their chain or the orphaned bucket */
-	int orphan = full_count;
-	for (BackupInfo *b = all_backups; b != NULL; b = b->next)
-	{
-		if (b->type == BACKUP_TYPE_FULL)
-			continue;
-
-		BackupInfo *root   = find_chain_root(b, all_backups);
-		int         target = orphan;
-
-		if (root != NULL)
-		{
-			for (int i = 0; i < full_count; i++)
-			{
-				if (chains[i].root == root)
-				{
-					target = i;
-					break;
-				}
-			}
-		}
-		chain_append(&chains[target], b);
-	}
-
-	/* Include orphaned bucket only if non-empty */
-	int total = full_count;
-	if (chains[orphan].count > 0)
-		total++;
-
-	/* Sort members within each chain by start_time */
-	for (int i = 0; i < total; i++)
-	{
-		if (chains[i].count > 1)
-			qsort(chains[i].members, chains[i].count,
-				  sizeof(BackupInfo *), compare_backup_by_time);
-	}
-
-	*nchains = total;
-	return chains;
-}
-
-static void
-free_chains(BackupChain *chains, int count)
-{
-	if (chains == NULL)
-		return;
-	for (int i = 0; i < count; i++)
-		free(chains[i].members);
-	free(chains);
-}
 
 /* Print [OK]/[ERROR]/[WARNING] results for one backup */
 static void
@@ -470,7 +325,7 @@ cmd_check_main(int argc, char **argv)
 		 * display each chain as a unit.
 		 */
 		int          nchains = 0;
-		BackupChain *chains  = build_chains(backups, &nchains);
+		BackupChain *chains  = backup_chain_build(backups, &nchains);
 
 		if (chains == NULL)
 		{
@@ -555,7 +410,7 @@ cmd_check_main(int argc, char **argv)
 			}
 		}
 
-		free_chains(chains, nchains);
+		backup_chain_free(chains, nchains);
 	}
 
 	/* WAL archive-wide continuity check (once, not per-backup) */

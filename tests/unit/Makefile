@@ -45,6 +45,7 @@ COMMON_SRCS = ../../src/common/string_utils.c \
               ../../src/common/ini_parser.c \
               ../../src/common/sha256.c \
               ../../src/common/arg_parser.c \
+              ../../src/common/backup_chain.c \
               ../../src/scanner/fs_scanner.c \
               ../../src/adapters/adapter_registry.c \
               ../../src/adapters/pg_basebackup.c \

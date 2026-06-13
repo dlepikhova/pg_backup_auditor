@@ -61,6 +61,7 @@ sources = files(
   'src/common/file_utils.c',
   'src/common/crc32c.c',
   'src/common/arg_parser.c',
+  'src/common/backup_chain.c',
   'src/common/ini_parser.c',
   'src/common/sha256.c',
   'src/scanner/fs_scanner.c',
