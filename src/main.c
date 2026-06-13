@@ -114,15 +114,18 @@ cleanup:
 	return ret;
 }
 
-/* Initialization and cleanup stubs */
+/* Global initialization - called once at program start */
 void
 pg_backup_auditor_init(void)
 {
-	/* TODO: Initialize logging, etc. */
+	/* Initialize logging subsystem (stderr by default) */
+	log_init();
 }
 
+/* Global cleanup - called once at program exit */
 void
 pg_backup_auditor_cleanup(void)
 {
-	/* TODO: Cleanup resources */
+	/* Currently no global resources to cleanup.
+	 * Future use: close log files, free global caches, etc. */
 }

@@ -392,9 +392,6 @@ cmd_info_main(int argc, char **argv)
 	BackupInfo *backup = NULL;
 	int ret;
 
-	/* Initialize logging */
-	log_init();
-
 	/* Initialize options */
 	init_options(&opts);
 

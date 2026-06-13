@@ -470,7 +470,6 @@ cmd_stat_main(int argc, char **argv)
 	int group_count = 0;
 	int ret;
 
-	log_init();
 	init_options(&opts);
 
 	ret = parse_arguments(argc, argv, &opts);

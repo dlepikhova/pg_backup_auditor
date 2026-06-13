@@ -988,9 +988,6 @@ cmd_list_main(int argc, char **argv)
 	OutputStats stats;
 	char total_size_str[64];
 
-	/* Initialize logging */
-	log_init();
-
 	/* Initialize options */
 	init_options(&opts);
 

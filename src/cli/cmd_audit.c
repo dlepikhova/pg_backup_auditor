@@ -1003,7 +1003,6 @@ cmd_audit_main(int argc, char **argv)
 	char           *wal_path_alloc  = NULL;  /* auto-detected path, must be freed */
 	int ret;
 
-	log_init();
 	init_options(&opts);
 
 	ret = parse_arguments(argc, argv, &opts);

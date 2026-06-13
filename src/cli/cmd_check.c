@@ -341,9 +341,6 @@ cmd_check_main(int argc, char **argv)
 	int total_errors = 0;
 	int total_warnings = 0;
 
-	/* Initialize logging */
-	log_init();
-
 	/* Initialize options */
 	init_options(&opts);
 
