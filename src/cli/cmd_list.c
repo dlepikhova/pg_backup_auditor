@@ -1016,7 +1016,7 @@ cmd_list_main(int argc, char **argv)
 	{
 		fprintf(stderr, "No backups found in %s\n", opts.backup_dir);
 		log_info("No backups found");
-		return EXIT_NO_BACKUPS_FOUND;
+		return EXIT_GENERAL_ERROR;
 	}
 
 	/* Output results (sorting is done per-directory group inside output_backups) */

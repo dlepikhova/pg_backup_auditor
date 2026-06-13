@@ -23,17 +23,11 @@
 #ifndef CONSTANTS_H
 #define CONSTANTS_H
 
-/* Exit codes - General */
-#define EXIT_SUCCESS            0
-#define EXIT_GENERAL_ERROR      1
-#define EXIT_INVALID_ARGUMENTS  4
-
-/* Exit codes - check command specific */
-#define EXIT_VALIDATION_FAILED  2
-#define EXIT_CRITICAL_ERROR     3
-
-/* Exit codes - list command specific */
-#define EXIT_NO_BACKUPS_FOUND   3
+/* Exit codes - unified */
+#define EXIT_SUCCESS            0   /* All checks/operations passed successfully */
+#define EXIT_GENERAL_ERROR      1   /* I/O error, file/directory not found, permission denied, etc. */
+#define EXIT_VALIDATION_FAILED  2   /* Validation found errors or warnings (check/audit), or no backups found */
+#define EXIT_INVALID_ARGUMENTS  4   /* Bad command-line arguments or invalid options */
 
 /* File names */
 #define BACKUP_LABEL_FILE       "backup_label"

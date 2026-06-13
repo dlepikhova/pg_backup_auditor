@@ -430,7 +430,7 @@ cmd_info_main(int argc, char **argv)
 			fprintf(stderr, "Error: Backup with ID '%s' not found\n", opts.backup_id);
 		else
 			fprintf(stderr, "Error: No backup found at: %s\n", opts.backup_path);
-		return EXIT_NO_BACKUPS_FOUND;
+		return EXIT_GENERAL_ERROR;
 	}
 
 	/* Display backup information */

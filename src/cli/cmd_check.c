@@ -366,7 +366,7 @@ cmd_check_main(int argc, char **argv)
 	if (backups == NULL)
 	{
 		fprintf(stderr, "Error: No backups found in: %s\n", opts.backup_dir);
-		return EXIT_NO_BACKUPS_FOUND;
+		return EXIT_GENERAL_ERROR;
 	}
 
 	/* Scan WAL archive if provided and WAL checks are not skipped */
