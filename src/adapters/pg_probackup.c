@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 /* Forward declarations */
 static bool pg_probackup_detect(const char *path);
@@ -214,7 +215,13 @@ parse_control_line(const char *line, const char *key, char *value, size_t value_
 		return;
 
 	/* Check if this is the key we're looking for */
-	if (strncmp(line, key, strlen(key)) != 0)
+	size_t keylen = strlen(key);
+	if (strncmp(line, key, keylen) != 0)
+		return;
+
+	/* Verify boundary: next character after key must be '=' or whitespace
+	 * (prevents "timeline" from matching "timelineid") */
+	if (line[keylen] != '=' && !isspace((unsigned char)line[keylen]))
 		return;
 
 	/* Skip whitespace after equals */
