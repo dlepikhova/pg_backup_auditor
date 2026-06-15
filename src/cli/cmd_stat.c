@@ -35,6 +35,14 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
+/*
+ * Per-row format for the per-(tool, type) statistics table.
+ * Used for both header and data so columns line up by construction.
+ * Widths: Type=12 (L), Count=5 (R), Interval=9 (L), Total=10 (R),
+ *         Avg=9 (R), Duration=13 (R), OK%=4 (R); separator: 2 spaces.
+ */
+#define STAT_ROW_FMT "  %-12s  %5s  %-9s  %10s  %9s  %13s  %4s\n"
+
 typedef struct {
 	char *backup_dir;
 	char *wal_archive;
@@ -168,6 +176,37 @@ format_duration(double seconds, char *buf, size_t size)
 		snprintf(buf, size, "%dm %ds", secs / 60, secs % 60);
 	else
 		snprintf(buf, size, "%ds", secs);
+}
+
+/*
+ * Format an inter-backup interval (seconds) at a coarser granularity than
+ * format_duration: days/hours for typical backup cadences. Negative input
+ * (e.g. fewer than 2 backups) renders as "N/A".
+ */
+static void
+format_interval(double seconds, char *buf, size_t size)
+{
+	if (seconds < 0)
+	{
+		snprintf(buf, size, "N/A");
+		return;
+	}
+	long s = (long)seconds;
+	if (s >= 86400)
+	{
+		long days  = s / 86400;
+		long hours = (s % 86400) / 3600;
+		if (hours > 0)
+			snprintf(buf, size, "%ldd %ldh", days, hours);
+		else
+			snprintf(buf, size, "%ldd", days);
+	}
+	else if (s >= 3600)
+		snprintf(buf, size, "%ldh", s / 3600);
+	else if (s >= 60)
+		snprintf(buf, size, "%ldm", s / 60);
+	else
+		snprintf(buf, size, "<1m");
 }
 
 static uint64_t __attribute__((unused))
@@ -579,8 +618,10 @@ cmd_stat_main(int argc, char **argv)
 				printf(" / %s", g->instance_name);
 			printf("%s\n", rst);
 
-			printf("  Type            Count    Total Size   Avg Size   Avg Duration   OK%%\n");
-			printf("  ───────────────────────────────────────────────────────────────────\n");
+			printf(STAT_ROW_FMT,
+				   "Type", "Count", "Interval",
+				   "Total Size", "Avg Size", "Avg Duration", "OK%");
+			printf("  ──────────────────────────────────────────────────────────────────────────\n");
 			current_tool = g->tool;
 			str_copy(current_instance, g->instance_name, sizeof(current_instance));
 		}
@@ -590,16 +631,26 @@ cmd_stat_main(int argc, char **argv)
 		double avg_dur = (g->duration_count > 0)
 			? (double)g->total_duration / g->duration_count : -1.0;
 
-		char total_str[32], avg_str[32], dur_str[16], ok_pct_str[8];
+		/* Average interval between backups within this group.
+		 * Needs at least 2 backups spanning a real time range. */
+		double avg_interval = -1.0;
+		if (g->count >= 2 && g->max_time > g->min_time)
+			avg_interval = (double)(g->max_time - g->min_time) / (g->count - 1);
+
+		char count_str[16], total_str[32], avg_str[32];
+		char dur_str[16], ok_pct_str[8], interval_str[16];
+		snprintf(count_str, sizeof(count_str), "%d", g->count);
 		format_bytes(g->total_bytes, total_str, sizeof(total_str));
 		format_bytes(avg_bytes, avg_str, sizeof(avg_str));
 		format_duration(avg_dur, dur_str, sizeof(dur_str));
+		format_interval(avg_interval, interval_str, sizeof(interval_str));
 		snprintf(ok_pct_str, sizeof(ok_pct_str), "%d%%",
 				 g->count > 0 ? (g->ok_count * 100 / g->count) : 0);
 
-		printf("  %-12s  %5d   %10s   %9s   %13s  %3s\n",
+		printf(STAT_ROW_FMT,
 			   backup_type_to_string(g->type),
-			   g->count,
+			   count_str,
+			   interval_str,
 			   total_str,
 			   avg_str,
 			   dur_str,

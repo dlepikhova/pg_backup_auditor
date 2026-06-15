@@ -262,6 +262,8 @@ print_stat_usage(void)
 
 	printf("STATISTICS BY GROUP:\n");
 	printf("  Count        - Number of backups in this group\n");
+	printf("  Interval     - Average time between consecutive backups in this group\n");
+	printf("                 (computed as span / (count - 1); N/A if fewer than 2 backups)\n");
 	printf("  Total Size   - Combined size of all backups in group\n");
 	printf("  Avg Size     - Average size per backup\n");
 	printf("  Avg Duration - Average backup duration (h/m/s), N/A if no valid duration\n");
