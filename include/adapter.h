@@ -66,5 +66,7 @@ BackupAdapter* get_adapter_for_tool(BackupTool tool);
 const char* backup_type_to_string(BackupType type);
 const char* backup_tool_to_string(BackupTool tool);
 const char* backup_status_to_string(BackupStatus status);
+bool backup_tool_from_string(const char *str, BackupTool *out);
+bool backup_status_from_string(const char *str, BackupStatus *out);
 
 #endif /* ADAPTER_H */

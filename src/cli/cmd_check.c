@@ -96,15 +96,7 @@ parse_arguments(int argc, char **argv, CheckOptions *opts)
 			case 'l':
 				if (check_duplicate_option(level_seen, "--level"))
 					return EXIT_INVALID_ARGUMENTS;
-				if (strcmp(optarg, "basic") == 0)
-					opts->level = VALIDATION_LEVEL_BASIC;
-				else if (strcmp(optarg, "standard") == 0)
-					opts->level = VALIDATION_LEVEL_STANDARD;
-				else if (strcmp(optarg, "checksums") == 0)
-					opts->level = VALIDATION_LEVEL_CHECKSUMS;
-				else if (strcmp(optarg, "full") == 0)
-					opts->level = VALIDATION_LEVEL_FULL;
-				else
+				if (!validation_level_from_string(optarg, &opts->level))
 				{
 					fprintf(stderr, "Error: Invalid validation level: %s\n", optarg);
 					fprintf(stderr, "Valid levels: basic, standard, checksums, full\n");

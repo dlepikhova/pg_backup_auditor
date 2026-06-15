@@ -26,11 +26,28 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <inttypes.h>
 #include <stdint.h>
 
 /* Maximum steps when walking a backup chain (cycle / depth guard) */
 #define MAX_CHAIN_DEPTH 10000
+
+/*
+ * Parse ValidationLevel from string (case-insensitive).
+ * Returns true if recognized and writes the enum value to *out.
+ */
+bool
+validation_level_from_string(const char *str, ValidationLevel *out)
+{
+	if (str == NULL || out == NULL)
+		return false;
+	if (strcasecmp(str, "basic")     == 0) { *out = VALIDATION_LEVEL_BASIC;     return true; }
+	if (strcasecmp(str, "standard")  == 0) { *out = VALIDATION_LEVEL_STANDARD;  return true; }
+	if (strcasecmp(str, "checksums") == 0) { *out = VALIDATION_LEVEL_CHECKSUMS; return true; }
+	if (strcasecmp(str, "full")      == 0) { *out = VALIDATION_LEVEL_FULL;      return true; }
+	return false;
+}
 
 /* ------------------------------------------------------------------ *
  * Internal helpers

@@ -199,14 +199,15 @@ validate_options(const ListOptions *opts)
 	}
 
 	/* Validate type filter */
-	if (strcasecmp(opts->type_filter, "auto") != 0 &&
-		strcasecmp(opts->type_filter, "pg_basebackup") != 0 &&
-		strcasecmp(opts->type_filter, "pg_probackup") != 0 &&
-		strcasecmp(opts->type_filter, "pgbackrest") != 0)
 	{
-		fprintf(stderr, "Error: Invalid type filter: %s\n", opts->type_filter);
-		fprintf(stderr, "Valid types: auto, pg_basebackup, pg_probackup, pgbackrest (case-insensitive)\n");
-		return EXIT_INVALID_ARGUMENTS;
+		BackupTool dummy;
+		if (strcasecmp(opts->type_filter, "auto") != 0 &&
+			!backup_tool_from_string(opts->type_filter, &dummy))
+		{
+			fprintf(stderr, "Error: Invalid type filter: %s\n", opts->type_filter);
+			fprintf(stderr, "Valid types: auto, pg_basebackup, pg_probackup, pgbackrest (case-insensitive)\n");
+			return EXIT_INVALID_ARGUMENTS;
+		}
 	}
 
 	/* Validate format */
@@ -218,17 +219,15 @@ validate_options(const ListOptions *opts)
 	}
 
 	/* Validate status filter */
-	if (strcasecmp(opts->status_filter, "all")     != 0 &&
-		strcasecmp(opts->status_filter, "ok")      != 0 &&
-		strcasecmp(opts->status_filter, "warning") != 0 &&
-		strcasecmp(opts->status_filter, "error")   != 0 &&
-		strcasecmp(opts->status_filter, "corrupt") != 0 &&
-		strcasecmp(opts->status_filter, "orphan")  != 0 &&
-		strcasecmp(opts->status_filter, "running") != 0)
 	{
-		fprintf(stderr, "Error: Invalid status filter: %s\n", opts->status_filter);
-		fprintf(stderr, "Valid values: all, ok, warning, error, corrupt, orphan, running\n");
-		return EXIT_INVALID_ARGUMENTS;
+		BackupStatus dummy;
+		if (strcasecmp(opts->status_filter, "all") != 0 &&
+			!backup_status_from_string(opts->status_filter, &dummy))
+		{
+			fprintf(stderr, "Error: Invalid status filter: %s\n", opts->status_filter);
+			fprintf(stderr, "Valid values: all, ok, warning, error, corrupt, orphan, running\n");
+			return EXIT_INVALID_ARGUMENTS;
+		}
 	}
 
 	/* Validate sort_by */
@@ -256,37 +255,18 @@ matches_filters(const BackupInfo *backup, const ListOptions *opts)
 	/* Filter by tool type */
 	if (strcasecmp(opts->type_filter, "auto") != 0)
 	{
-		if (strcasecmp(opts->type_filter, "pg_basebackup") == 0 &&
-			backup->tool != BACKUP_TOOL_PG_BASEBACKUP)
-			return false;
-		if (strcasecmp(opts->type_filter, "pg_probackup") == 0 &&
-			backup->tool != BACKUP_TOOL_PG_PROBACKUP)
-			return false;
-		if (strcasecmp(opts->type_filter, "pgbackrest") == 0 &&
-			backup->tool != BACKUP_TOOL_PGBACKREST)
+		BackupTool wanted;
+		if (backup_tool_from_string(opts->type_filter, &wanted) &&
+			backup->tool != wanted)
 			return false;
 	}
 
 	/* Filter by status */
 	if (strcasecmp(opts->status_filter, "all") != 0)
 	{
-		if (strcasecmp(opts->status_filter, "ok") == 0 &&
-			backup->status != BACKUP_STATUS_OK)
-			return false;
-		if (strcasecmp(opts->status_filter, "error") == 0 &&
-			backup->status != BACKUP_STATUS_ERROR)
-			return false;
-		if (strcasecmp(opts->status_filter, "warning") == 0 &&
-			backup->status != BACKUP_STATUS_WARNING)
-			return false;
-		if (strcasecmp(opts->status_filter, "corrupt") == 0 &&
-			backup->status != BACKUP_STATUS_CORRUPT)
-			return false;
-		if (strcasecmp(opts->status_filter, "orphan") == 0 &&
-			backup->status != BACKUP_STATUS_ORPHAN)
-			return false;
-		if (strcasecmp(opts->status_filter, "running") == 0 &&
-			backup->status != BACKUP_STATUS_RUNNING)
+		BackupStatus wanted;
+		if (backup_status_from_string(opts->status_filter, &wanted) &&
+			backup->status != wanted)
 			return false;
 	}
 

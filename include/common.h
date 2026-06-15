@@ -92,6 +92,7 @@ ValidationResult* validate_single_backup(BackupInfo *backup, WALArchiveInfo *wal
 ValidationResult* validate_backup_chain(BackupInfo *backup, BackupInfo *all_backups, WALArchiveInfo *wal_info, ValidationLevel level);
 ValidationResult* check_retention_policy(BackupInfo *backups, int retention_days, int retention_weekly);
 void free_validation_result(ValidationResult *result);
+bool validation_level_from_string(const char *str, ValidationLevel *out);
 
 /* validator/pg_probackup_validator.c */
 ValidationResult* pg_probackup_validate_structure(BackupInfo *backup);

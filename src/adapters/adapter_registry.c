@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 /* Registry of all adapters */
 BackupAdapter *pg_backup_auditor_adapters[] = {
@@ -134,4 +135,37 @@ backup_status_to_string(BackupStatus status)
 		default:
 			return "UNKNOWN";
 	}
+}
+
+/*
+ * Parse BackupTool from string (case-insensitive).
+ * Returns true if recognized and writes the enum value to *out.
+ */
+bool
+backup_tool_from_string(const char *str, BackupTool *out)
+{
+	if (str == NULL || out == NULL)
+		return false;
+	if (strcasecmp(str, "pg_basebackup") == 0) { *out = BACKUP_TOOL_PG_BASEBACKUP; return true; }
+	if (strcasecmp(str, "pg_probackup") == 0) { *out = BACKUP_TOOL_PG_PROBACKUP;  return true; }
+	if (strcasecmp(str, "pgbackrest")   == 0) { *out = BACKUP_TOOL_PGBACKREST;    return true; }
+	return false;
+}
+
+/*
+ * Parse BackupStatus from string (case-insensitive).
+ * Returns true if recognized and writes the enum value to *out.
+ */
+bool
+backup_status_from_string(const char *str, BackupStatus *out)
+{
+	if (str == NULL || out == NULL)
+		return false;
+	if (strcasecmp(str, "ok")      == 0) { *out = BACKUP_STATUS_OK;      return true; }
+	if (strcasecmp(str, "running") == 0) { *out = BACKUP_STATUS_RUNNING; return true; }
+	if (strcasecmp(str, "corrupt") == 0) { *out = BACKUP_STATUS_CORRUPT; return true; }
+	if (strcasecmp(str, "error")   == 0) { *out = BACKUP_STATUS_ERROR;   return true; }
+	if (strcasecmp(str, "orphan")  == 0) { *out = BACKUP_STATUS_ORPHAN;  return true; }
+	if (strcasecmp(str, "warning") == 0) { *out = BACKUP_STATUS_WARNING; return true; }
+	return false;
 }
