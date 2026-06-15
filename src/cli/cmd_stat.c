@@ -638,7 +638,7 @@ cmd_stat_main(int argc, char **argv)
 			avg_interval = (double)(g->max_time - g->min_time) / (g->count - 1);
 
 		char count_str[16], total_str[32], avg_str[32];
-		char dur_str[16], ok_pct_str[8], interval_str[16];
+		char dur_str[16], ok_pct_str[8], interval_str[24];
 		snprintf(count_str, sizeof(count_str), "%d", g->count);
 		format_bytes(g->total_bytes, total_str, sizeof(total_str));
 		format_bytes(avg_bytes, avg_str, sizeof(avg_str));
