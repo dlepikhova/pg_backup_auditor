@@ -94,10 +94,8 @@ parse_arguments(int argc, char **argv, StatOptions *opts)
 		switch (c)
 		{
 			case 'B':
-				if (check_duplicate_option(backup_dir_seen, "--backup-dir"))
+				if (!parse_string_option("--backup-dir", optarg, &opts->backup_dir, &backup_dir_seen))
 					return EXIT_INVALID_ARGUMENTS;
-				opts->backup_dir = optarg;
-				backup_dir_seen = true;
 				break;
 			case 'W':
 				opts->wal_archive = optarg;

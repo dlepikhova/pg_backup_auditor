@@ -32,6 +32,13 @@
 bool check_duplicate_option(bool seen, const char *option_name);
 
 /*
+ * Parse a string-valued CLI option: enforce no duplicates, then assign.
+ * Returns false (and reports an error) if the option was already seen.
+ */
+bool parse_string_option(const char *option_name, const char *value,
+                        char **target, bool *seen);
+
+/*
  * Parse an integer argument and validate it
  * Returns true on success, false on error
  */

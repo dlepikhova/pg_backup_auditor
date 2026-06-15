@@ -97,37 +97,27 @@ parse_arguments(int argc, char **argv, ListOptions *opts)
 		switch (c)
 		{
 			case 'B':
-				if (check_duplicate_option(backup_dir_seen, "--backup-dir"))
+				if (!parse_string_option("--backup-dir", optarg, &opts->backup_dir, &backup_dir_seen))
 					return EXIT_INVALID_ARGUMENTS;
-				opts->backup_dir = optarg;
-				backup_dir_seen = true;
 				break;
 			case 't':
-				if (check_duplicate_option(type_seen, "--type"))
+				if (!parse_string_option("--type", optarg, &opts->type_filter, &type_seen))
 					return EXIT_INVALID_ARGUMENTS;
-				opts->type_filter = optarg;
-				type_seen = true;
 				break;
 			case 's':
-				if (check_duplicate_option(status_seen, "--status"))
+				if (!parse_string_option("--status", optarg, &opts->status_filter, &status_seen))
 					return EXIT_INVALID_ARGUMENTS;
-				opts->status_filter = optarg;
-				status_seen = true;
 				break;
 			case 'f':
-				if (check_duplicate_option(format_seen, "--format"))
+				if (!parse_string_option("--format", optarg, &opts->format, &format_seen))
 					return EXIT_INVALID_ARGUMENTS;
-				opts->format = optarg;
-				format_seen = true;
 				break;
 			case 0:
 				/* Long option without short equivalent (--sort-by) */
 				if (strcmp(long_options[option_index].name, "sort-by") == 0)
 				{
-					if (check_duplicate_option(sort_by_seen, "--sort-by"))
+					if (!parse_string_option("--sort-by", optarg, &opts->sort_by, &sort_by_seen))
 						return EXIT_INVALID_ARGUMENTS;
-					opts->sort_by = optarg;
-					sort_by_seen = true;
 				}
 				break;
 			case 'r':

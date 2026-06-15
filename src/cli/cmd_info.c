@@ -84,22 +84,16 @@ parse_arguments(int argc, char **argv, InfoOptions *opts)
 		switch (c)
 		{
 			case 'p':
-				if (check_duplicate_option(backup_path_seen, "--backup-path"))
+				if (!parse_string_option("--backup-path", optarg, &opts->backup_path, &backup_path_seen))
 					return EXIT_INVALID_ARGUMENTS;
-				opts->backup_path = optarg;
-				backup_path_seen = true;
 				break;
 			case 'B':
-				if (check_duplicate_option(backup_dir_seen, "--backup-dir"))
+				if (!parse_string_option("--backup-dir", optarg, &opts->backup_dir, &backup_dir_seen))
 					return EXIT_INVALID_ARGUMENTS;
-				opts->backup_dir = optarg;
-				backup_dir_seen = true;
 				break;
 			case 'i':
-				if (check_duplicate_option(backup_id_seen, "--backup-id"))
+				if (!parse_string_option("--backup-id", optarg, &opts->backup_id, &backup_id_seen))
 					return EXIT_INVALID_ARGUMENTS;
-				opts->backup_id = optarg;
-				backup_id_seen = true;
 				break;
 			case 'h':
 				print_info_usage();

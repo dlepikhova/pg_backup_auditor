@@ -70,16 +70,12 @@ parse_arguments(int argc, char **argv, AuditOptions *opts)
 		switch (c)
 		{
 			case 'B':
-				if (check_duplicate_option(backup_dir_seen, "--backup-dir"))
+				if (!parse_string_option("--backup-dir", optarg, &opts->backup_dir, &backup_dir_seen))
 					return EXIT_INVALID_ARGUMENTS;
-				opts->backup_dir = optarg;
-				backup_dir_seen = true;
 				break;
 			case 'w':
-				if (check_duplicate_option(wal_archive_seen, "--wal-archive"))
+				if (!parse_string_option("--wal-archive", optarg, &opts->wal_archive, &wal_archive_seen))
 					return EXIT_INVALID_ARGUMENTS;
-				opts->wal_archive = optarg;
-				wal_archive_seen = true;
 				break;
 			case 's':
 				opts->detect_size_small = true;
