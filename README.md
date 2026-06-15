@@ -8,6 +8,7 @@ Cross-platform PostgreSQL backup auditor — unified analysis and validation too
 - **Backup listing** with filtering by tool/status, sorting, WAL mode column, tree display for chains
 - **Detailed backup info**: timing, storage, PostgreSQL metadata (LSN, timeline, WAL mode)
 - **Backup audit**: per-chain recovery points, RPO gap, orphaned backups, WAL coverage, disk usage
+- **Backup statistics**: per-(tool, type) counts, average size/duration, success rate, average interval between backups; storage and WAL volume per day; database growth trend from FULL backups; incremental efficiency vs FULL
 - **Backup validation** with 4 levels (basic → standard → checksums → full):
   - Level 1 (basic): on-disk structure — required files and directories, backup chain integrity
   - Level 2 (standard): metadata consistency — timestamps, LSN range, timeline, pg version
@@ -192,6 +193,32 @@ pg_backup_auditor audit --backup-dir=PATH [OPTIONS]
 - `stream` — WAL embedded in backup (fastest recovery, no external archive needed)
 - `archive` — WAL stored separately (requires `--wal-archive` for validation)
 - `mixed` — same chain contains both (not recommended; indicates inconsistent backup strategy)
+
+### `stat`
+
+Aggregate statistics across the entire backup collection: counts, sizes, frequency, growth trend, incremental efficiency.
+
+```
+pg_backup_auditor stat --backup-dir=PATH [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--backup-dir=PATH, -B PATH` | Backup directory (required) |
+| `--wal-archive=PATH, -W PATH` | Path to WAL archive for pg_probackup (auto-detected from backup directory if omitted) |
+
+**Output sections:**
+
+| Section | Description |
+|---------|-------------|
+| **Statistics by group** | Per-(tool, type, instance) table: count, average interval between backups, total/avg size, avg duration, OK% |
+| **STORAGE** | Total counts and sizes broken down by status (OK, WARNING, ERROR, CORRUPT, ORPHAN, RUNNING); WAL archive volume per day per tool/instance |
+| **DATABASE GROWTH TREND** | FULL backup size trend per tool/instance: average, minimum, maximum size — useful for capacity planning |
+| **INCREMENTAL EFFICIENCY** | Average size of non-FULL backups as a percentage of FULL size: low % = efficient incrementals; high % = strategy issue |
+
+**Interval column:** average time between consecutive backups within the group, computed as `(max_time − min_time) / (count − 1)`. Shown as `N/A` when fewer than 2 backups exist.
 
 ## Exit Codes
 
