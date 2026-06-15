@@ -30,7 +30,6 @@
 #include <string.h>
 #include <time.h>
 #include <getopt.h>
-#include <math.h>
 #include <limits.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -54,7 +53,6 @@ typedef struct {
 	char       instance_name[64];
 	int        count;
 	uint64_t   total_bytes;
-	uint64_t   sum_sizes_sq;
 	uint64_t   total_wal_bytes;
 	time_t     min_time;
 	time_t     max_time;
@@ -209,19 +207,6 @@ format_interval(double seconds, char *buf, size_t size)
 		snprintf(buf, size, "<1m");
 }
 
-static uint64_t __attribute__((unused))
-calculate_stddev(StatGroup *g)
-{
-	if (g->count < 2)
-		return 0;
-
-	double avg = (double)g->total_bytes / g->count;
-	double variance = ((double)g->sum_sizes_sq / g->count) - (avg * avg);
-	if (variance < 0)
-		variance = 0;
-	return (uint64_t)(sqrt(variance) + 0.5);
-}
-
 static StatGroup *
 find_or_create_group(StatGroup *groups, int *group_count, int group_cap,
 					 BackupTool tool, BackupType type, const char *instance_name)
@@ -242,7 +227,6 @@ find_or_create_group(StatGroup *groups, int *group_count, int group_cap,
 	str_copy(g->instance_name, instance_name, sizeof(g->instance_name));
 	g->count = 0;
 	g->total_bytes = 0;
-	g->sum_sizes_sq = 0;
 	g->total_wal_bytes = 0;
 	g->min_time = LLONG_MAX;
 	g->max_time = 0;
@@ -553,7 +537,6 @@ cmd_stat_main(int argc, char **argv)
 		g->count++;
 		uint64_t size = b->data_bytes + b->wal_bytes;
 		g->total_bytes += size;
-		g->sum_sizes_sq += size * size;
 		g->total_wal_bytes += b->wal_bytes;
 
 		if (b->start_time > 0)
