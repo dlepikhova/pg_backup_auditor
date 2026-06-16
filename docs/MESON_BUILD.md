@@ -77,7 +77,7 @@ meson setup builddir --reconfigure
 After setup, Meson shows a configuration summary:
 
 ```
-pg_backup_auditor 0.1.0-dev
+pg_backup_auditor 0.3.0
 
   Configuration
     prefix    : /opt/homebrew

@@ -1,5 +1,78 @@
 # pg_backup_auditor Release History
 
+## [v0.3.0](https://github.com/daria-lepikhova/pg_backup_auditor/releases/tag/v0.3.0) - 2026-06-16
+
+**Minor release: New `stat` command, anomaly detection in `audit`, and internal cleanup.**
+
+### Enhancements
+
+#### New Command: `stat`
+
+Aggregate statistics across the entire backup collection, complementing `audit` (facts vs. assessment):
+
+- **Statistics by group** — per-(tool, type, instance) table: count, average interval between backups, total/avg size, average duration, success rate
+- **STORAGE** — counts and sizes by status (OK / WARNING / ERROR / CORRUPT / ORPHAN / RUNNING); WAL archive volume per day per tool/instance, with auto-detection of the pg_probackup WAL archive path
+- **DATABASE GROWTH TREND** — net size change between the first and last FULL backup plus a monthly rate; robust to intermediate WAL noise in stream-mode `pg_basebackup`. Filtered to OK/WARNING backups so stub/corrupt entries do not distort the time and size axes
+- **INCREMENTAL EFFICIENCY** — average size of DELTA/PAGE/PTRACK/INCREMENTAL backups as a percentage of FULL size
+
+Example:
+```bash
+pg_backup_auditor stat -B /var/lib/pgbackup
+```
+
+#### Anomaly Detection in `audit`
+
+- Size anomalies: backups >2x average (always enabled)
+- Duration anomalies: backups >2x faster/slower than average
+- Small backups: <0.5x average (opt-in via `--detect-size-small`)
+- Statistics computed separately per (tool, type) combination
+- Reported with actual value, average, and multiplier
+
+### Code Quality
+
+- **Shared chain grouping** — extracted `BackupChain` struct and helpers (`build_chains`, `find_chain_root`, `find_backup_in_list`) into `src/common/backup_chain.c`; eliminated ~280 lines duplicated between `cmd_check.c` and `cmd_audit.c`
+- **`*_from_string` helpers** — paired with the existing `*_to_string` converters for `BackupTool`, `BackupStatus`, and `ValidationLevel`; case-insensitive
+- **`parse_string_option` helper** — collapses the recurring "duplicate check + assign + set seen" boilerplate across all CLI option handlers
+- **Logging initialization** centralized in `pg_backup_auditor_init()` (removed redundant `log_init()` calls from each command)
+- **Exit codes** unified to standard Unix convention: 0 = success, 1 = general error, 2 = validation failed, 4 = invalid arguments
+- **Removed dead `calculate_stddev()`** and its `sum_sizes_sq` field from `StatGroup` along with the per-backup accumulation in the hot loop
+
+### Fixes
+
+- **pg_probackup metadata parsing** — added boundary check after `strncmp()` in `parse_control_line()` so keys like `timeline` no longer match prefixed values such as `timelineid`
+- **Meson test build** broken since May 2026 — added missing `test_anomaly_detection.c` and its dependencies (`cmd_audit.c`, `cmd_help.c`, `arg_parser.c`) to `tests/unit/meson.build`
+- **`-Wformat-truncation` warning** on Ubuntu GCC for `format_interval()` — bumped buffer size to accommodate the worst-case `long` argument range
+
+### Testing
+
+- **267 unit tests** (up from 244), 100% pass rate
+- 23 new tests covering: prefix-collision regression (1), `*_from_string` parsers (9), `parse_string_option` (3), `backup_chain_*` (7), anomaly detection (3)
+- Full CI coverage: Ubuntu 22.04/24.04, macOS 14; PostgreSQL 14–18
+
+### Compatibility
+
+- **PostgreSQL**: 14, 15, 16, 17, 18
+- **Backup tools**: pg_basebackup, pg_probackup 2.5+, pgBackRest
+- **Platforms**: Linux (Ubuntu 22.04+, RHEL, Debian), macOS 14+
+- **Build systems**: Makefile, Meson
+
+### Installation
+
+```bash
+git clone https://github.com/daria-lepikhova/pg_backup_auditor.git
+cd pg_backup_auditor
+meson setup builddir && ninja -C builddir
+sudo ninja -C builddir install
+```
+
+### Migration from v0.2.0
+
+No breaking changes. The new `stat` command and `audit` anomaly detection are additive. The internal refactorings (`backup_chain.c`, `*_from_string`, `parse_string_option`) do not affect user-visible behavior or CLI surface.
+
+**Full Changelog**: [v0.2.0...v0.3.0](https://github.com/daria-lepikhova/pg_backup_auditor/compare/v0.2.0...v0.3.0)
+
+---
+
 ## [v0.2.0](https://github.com/daria-lepikhova/pg_backup_auditor/releases/tag/v0.2.0) - 2026-04-16
 
 **Major release: Critical bug fixes, security hardening, and comprehensive test coverage.**
