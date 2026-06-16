@@ -177,6 +177,19 @@ format_duration(double seconds, char *buf, size_t size)
 }
 
 /*
+ * Format a signed byte count for growth deltas: "+150 MB", "-20 MB", "+0 B".
+ * Sign is always shown so positive growth and shrinkage are visually distinct.
+ */
+static void
+format_signed_bytes(int64_t bytes, char *buf, size_t size)
+{
+	char mag[24];
+	uint64_t abs_val = (bytes < 0) ? (uint64_t)(-bytes) : (uint64_t)bytes;
+	format_bytes(abs_val, mag, sizeof(mag));
+	snprintf(buf, size, "%c%s", bytes < 0 ? '-' : '+', mag);
+}
+
+/*
  * Format an inter-backup interval (seconds) at a coarser granularity than
  * format_duration: days/hours for typical backup cadences. Negative input
  * (e.g. fewer than 2 backups) renders as "N/A".
@@ -317,7 +330,15 @@ print_growth_efficiency(BackupInfo *backups, StatGroup *groups, int group_count)
 
 	for (BackupInfo *b = backups; b != NULL; b = b->next)
 	{
-		if (b->type == BACKUP_TYPE_FULL && b->data_bytes > 0)
+		/* Growth analysis is only meaningful for healthy backups:
+		 * stub/corrupt/in-progress entries have unreliable sizes and
+		 * timestamps that distort both axes. OK and WARNING are
+		 * considered usable; ERROR/CORRUPT/ORPHAN/RUNNING are not. */
+		if (b->type == BACKUP_TYPE_FULL
+			&& (b->status == BACKUP_STATUS_OK
+				|| b->status == BACKUP_STATUS_WARNING)
+			&& b->data_bytes > 0
+			&& b->start_time > 0)
 		{
 			GrowthTrack *track = NULL;
 			for (int i = 0; i < track_count; i++)
@@ -376,49 +397,62 @@ print_growth_efficiency(BackupInfo *backups, StatGroup *groups, int group_count)
 			printf("    (no FULL backups)\n\n");
 			continue;
 		}
-		else if (track->full_count == 1)
+		if (track->full_count == 1)
 		{
-			char size_str[32];
-			format_bytes(track->fulls[0].data_bytes, size_str, sizeof(size_str));
-			printf("    Only 1 valid FULL backup: %s\n\n", size_str);
+			printf("    FULL growth: N/A (need ≥2 FULL backups)\n\n");
 			continue;
 		}
 
-		/* Calculate min/max/avg of FULL backup sizes (excluding zero-size) */
+		/* Average / min / max FULL size — gives the growth numbers a sense
+		 * of scale, mirroring how INCREMENTAL EFFICIENCY shows "vs FULL". */
+		uint64_t sum_size = 0;
 		uint64_t min_size = UINT64_MAX;
 		uint64_t max_size = 0;
-		uint64_t sum_size = 0;
-		int valid_count = 0;
-
 		for (int i = 0; i < track->full_count; i++)
 		{
-			uint64_t size = track->fulls[i].data_bytes;
-			if (size > 0)
-			{
-				sum_size += size;
-				if (size < min_size)
-					min_size = size;
-				if (size > max_size)
-					max_size = size;
-				valid_count++;
-			}
+			uint64_t sz = track->fulls[i].data_bytes;
+			sum_size += sz;
+			if (sz < min_size) min_size = sz;
+			if (sz > max_size) max_size = sz;
 		}
-
-		if (valid_count == 0)
-		{
-			printf("    (no FULL backups with data)\n\n");
-			continue;
-		}
-
-		uint64_t avg_size = sum_size / valid_count;
-
+		uint64_t avg_full = sum_size / track->full_count;
 		char avg_str[32], min_str[32], max_str[32];
-		format_bytes(avg_size, avg_str, sizeof(avg_str));
+		format_bytes(avg_full, avg_str, sizeof(avg_str));
 		format_bytes(min_size, min_str, sizeof(min_str));
 		format_bytes(max_size, max_str, sizeof(max_str));
 
-		printf("    FULL:  avg %s, min %s, max %s\n\n",
-			   avg_str, min_str, max_str);
+		/* Net growth between the first and last FULL (sorted by start_time).
+		 * Intermediate fluctuations (e.g. stream-mode WAL noise) cancel out,
+		 * so this is far more meaningful for capacity planning than the
+		 * mean/min/max of per-interval deltas. */
+		FullEntry *first = &track->fulls[0];
+		FullEntry *last  = &track->fulls[track->full_count - 1];
+		int64_t net_delta = (int64_t)last->data_bytes - (int64_t)first->data_bytes;
+		time_t  span      = last->start_time - first->start_time;
+
+		char net_str[32];
+		format_signed_bytes(net_delta, net_str, sizeof(net_str));
+
+		printf("    FULL: avg %s, min %s, max %s (%d backups)\n",
+			   avg_str, min_str, max_str, track->full_count);
+
+		if (span <= 0)
+		{
+			printf("      growth: %s over <1d\n\n", net_str);
+			continue;
+		}
+
+		long days = span / 86400;
+		if (days < 1) days = 1;
+		/* Rate normalized to a 30-day month. Use 64-bit math to avoid
+		 * overflow on large net_delta * 30. */
+		int64_t per_month = (net_delta * 30) / days;
+
+		char rate_str[32];
+		format_signed_bytes(per_month, rate_str, sizeof(rate_str));
+
+		printf("      growth: %s over %ldd  (≈ %s/month)\n\n",
+			   net_str, days, rate_str);
 	}
 
 	/* INCREMENTAL EFFICIENCY */

@@ -215,7 +215,7 @@ pg_backup_auditor stat --backup-dir=PATH [OPTIONS]
 |---------|-------------|
 | **Statistics by group** | Per-(tool, type, instance) table: count, average interval between backups, total/avg size, avg duration, OK% |
 | **STORAGE** | Total counts and sizes broken down by status (OK, WARNING, ERROR, CORRUPT, ORPHAN, RUNNING); WAL archive volume per day per tool/instance |
-| **DATABASE GROWTH TREND** | FULL backup size trend per tool/instance: average, minimum, maximum size — useful for capacity planning |
+| **DATABASE GROWTH TREND** | Per tool/instance: net size change between the first and last FULL backup, plus a monthly rate. Intermediate fluctuations (e.g. stream-mode WAL noise) cancel out. Useful for capacity planning (e.g. "need +X GB/month") |
 | **INCREMENTAL EFFICIENCY** | Average size of non-FULL backups as a percentage of FULL size: low % = efficient incrementals; high % = strategy issue |
 
 **Interval column:** average time between consecutive backups within the group, computed as `(max_time − min_time) / (count − 1)`. Shown as `N/A` when fewer than 2 backups exist.
