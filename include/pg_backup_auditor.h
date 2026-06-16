@@ -29,9 +29,9 @@
 #include "common.h"
 
 /* Version information */
-#define PG_BACKUP_AUDITOR_VERSION "0.2.0"
+#define PG_BACKUP_AUDITOR_VERSION "0.3.0"
 #define PG_BACKUP_AUDITOR_VERSION_MAJOR 0
-#define PG_BACKUP_AUDITOR_VERSION_MINOR 2
+#define PG_BACKUP_AUDITOR_VERSION_MINOR 3
 #define PG_BACKUP_AUDITOR_VERSION_PATCH 0
 
 /* Global initialization and cleanup */
