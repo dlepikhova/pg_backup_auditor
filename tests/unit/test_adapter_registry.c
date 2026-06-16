@@ -133,6 +133,120 @@ START_TEST(test_backup_status_to_string_unknown)
 }
 END_TEST
 
+/* ----- backup_tool_from_string ----- */
+
+START_TEST(test_backup_tool_from_string_known)
+{
+	BackupTool t;
+	ck_assert(backup_tool_from_string("pg_basebackup", &t));
+	ck_assert_int_eq(t, BACKUP_TOOL_PG_BASEBACKUP);
+	ck_assert(backup_tool_from_string("pg_probackup", &t));
+	ck_assert_int_eq(t, BACKUP_TOOL_PG_PROBACKUP);
+	ck_assert(backup_tool_from_string("pgbackrest", &t));
+	ck_assert_int_eq(t, BACKUP_TOOL_PGBACKREST);
+}
+END_TEST
+
+START_TEST(test_backup_tool_from_string_case_insensitive)
+{
+	BackupTool t;
+	ck_assert(backup_tool_from_string("PG_BASEBACKUP", &t));
+	ck_assert_int_eq(t, BACKUP_TOOL_PG_BASEBACKUP);
+	ck_assert(backup_tool_from_string("PgBackRest", &t));
+	ck_assert_int_eq(t, BACKUP_TOOL_PGBACKREST);
+}
+END_TEST
+
+START_TEST(test_backup_tool_from_string_invalid)
+{
+	BackupTool t = BACKUP_TOOL_PG_PROBACKUP;  /* sentinel */
+	ck_assert(!backup_tool_from_string("nope", &t));
+	ck_assert(!backup_tool_from_string("", &t));
+	ck_assert(!backup_tool_from_string(NULL, &t));
+	ck_assert(!backup_tool_from_string("pg_basebackup", NULL));
+	/* sentinel must be untouched on failure */
+	ck_assert_int_eq(t, BACKUP_TOOL_PG_PROBACKUP);
+}
+END_TEST
+
+/* ----- backup_status_from_string ----- */
+
+START_TEST(test_backup_status_from_string_known)
+{
+	BackupStatus st;
+	ck_assert(backup_status_from_string("ok",      &st));
+	ck_assert_int_eq(st, BACKUP_STATUS_OK);
+	ck_assert(backup_status_from_string("running", &st));
+	ck_assert_int_eq(st, BACKUP_STATUS_RUNNING);
+	ck_assert(backup_status_from_string("corrupt", &st));
+	ck_assert_int_eq(st, BACKUP_STATUS_CORRUPT);
+	ck_assert(backup_status_from_string("error",   &st));
+	ck_assert_int_eq(st, BACKUP_STATUS_ERROR);
+	ck_assert(backup_status_from_string("orphan",  &st));
+	ck_assert_int_eq(st, BACKUP_STATUS_ORPHAN);
+	ck_assert(backup_status_from_string("warning", &st));
+	ck_assert_int_eq(st, BACKUP_STATUS_WARNING);
+}
+END_TEST
+
+START_TEST(test_backup_status_from_string_case_insensitive)
+{
+	BackupStatus st;
+	ck_assert(backup_status_from_string("OK", &st));
+	ck_assert_int_eq(st, BACKUP_STATUS_OK);
+	ck_assert(backup_status_from_string("Warning", &st));
+	ck_assert_int_eq(st, BACKUP_STATUS_WARNING);
+}
+END_TEST
+
+START_TEST(test_backup_status_from_string_invalid)
+{
+	BackupStatus st = BACKUP_STATUS_OK;
+	ck_assert(!backup_status_from_string("done",  &st));
+	ck_assert(!backup_status_from_string("",      &st));
+	ck_assert(!backup_status_from_string(NULL,    &st));
+	ck_assert(!backup_status_from_string("ok",    NULL));
+	ck_assert_int_eq(st, BACKUP_STATUS_OK);
+}
+END_TEST
+
+/* ----- validation_level_from_string ----- */
+
+START_TEST(test_validation_level_from_string_known)
+{
+	ValidationLevel lvl;
+	ck_assert(validation_level_from_string("basic",     &lvl));
+	ck_assert_int_eq(lvl, VALIDATION_LEVEL_BASIC);
+	ck_assert(validation_level_from_string("standard",  &lvl));
+	ck_assert_int_eq(lvl, VALIDATION_LEVEL_STANDARD);
+	ck_assert(validation_level_from_string("checksums", &lvl));
+	ck_assert_int_eq(lvl, VALIDATION_LEVEL_CHECKSUMS);
+	ck_assert(validation_level_from_string("full",      &lvl));
+	ck_assert_int_eq(lvl, VALIDATION_LEVEL_FULL);
+}
+END_TEST
+
+START_TEST(test_validation_level_from_string_case_insensitive)
+{
+	ValidationLevel lvl;
+	ck_assert(validation_level_from_string("BASIC", &lvl));
+	ck_assert_int_eq(lvl, VALIDATION_LEVEL_BASIC);
+	ck_assert(validation_level_from_string("Full",  &lvl));
+	ck_assert_int_eq(lvl, VALIDATION_LEVEL_FULL);
+}
+END_TEST
+
+START_TEST(test_validation_level_from_string_invalid)
+{
+	ValidationLevel lvl = VALIDATION_LEVEL_BASIC;
+	ck_assert(!validation_level_from_string("paranoid", &lvl));
+	ck_assert(!validation_level_from_string("",         &lvl));
+	ck_assert(!validation_level_from_string(NULL,       &lvl));
+	ck_assert(!validation_level_from_string("basic",    NULL));
+	ck_assert_int_eq(lvl, VALIDATION_LEVEL_BASIC);
+}
+END_TEST
+
 /* Create test suite for adapter registry */
 Suite *
 adapter_registry_suite(void)
@@ -170,6 +284,21 @@ adapter_registry_suite(void)
 	tcase_add_test(tc_status, test_backup_status_to_string_warning);
 	tcase_add_test(tc_status, test_backup_status_to_string_unknown);
 	suite_add_tcase(s, tc_status);
+
+	/* Test case for *_from_string parsers */
+	{
+		TCase *tc_from = tcase_create("from_string");
+		tcase_add_test(tc_from, test_backup_tool_from_string_known);
+		tcase_add_test(tc_from, test_backup_tool_from_string_case_insensitive);
+		tcase_add_test(tc_from, test_backup_tool_from_string_invalid);
+		tcase_add_test(tc_from, test_backup_status_from_string_known);
+		tcase_add_test(tc_from, test_backup_status_from_string_case_insensitive);
+		tcase_add_test(tc_from, test_backup_status_from_string_invalid);
+		tcase_add_test(tc_from, test_validation_level_from_string_known);
+		tcase_add_test(tc_from, test_validation_level_from_string_case_insensitive);
+		tcase_add_test(tc_from, test_validation_level_from_string_invalid);
+		suite_add_tcase(s, tc_from);
+	}
 
 	return s;
 }

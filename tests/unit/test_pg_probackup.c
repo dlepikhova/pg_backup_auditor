@@ -279,6 +279,40 @@ START_TEST(test_parse_from_replica_primary)
 }
 END_TEST
 
+/*
+ * Regression: parse_control_line must not match keys via prefix.
+ * A line like "backup-id-extra = WRONG" used to be parsed as if it
+ * were "backup-id" because strncmp(line, key, strlen(key)) returned 0
+ * before the equals/whitespace boundary was checked. Place the decoy
+ * AFTER the real key so a buggy parser would overwrite the correct
+ * value during line-by-line iteration.
+ */
+START_TEST(test_parse_control_prefix_collision)
+{
+	char tmp[64], db_dir[PATH_MAX], ctl_path[PATH_MAX];
+	snprintf(tmp,      sizeof(tmp),      "/tmp/pg_pp_prefix_%d", (int)getpid());
+	snprintf(db_dir,   sizeof(db_dir),   "%s/database", tmp);
+	snprintf(ctl_path, sizeof(ctl_path), "%s/backup.control", tmp);
+	mkdir(tmp, 0755);
+	mkdir(db_dir, 0755);
+
+	FILE *f = fopen(ctl_path, "w");
+	ck_assert_ptr_nonnull(f);
+	fprintf(f, "backup-id = REALID\n");
+	fprintf(f, "backup-id-extra = WRONG\n");  /* decoy AFTER real key */
+	fprintf(f, "backup-mode = FULL\n");
+	fprintf(f, "status = OK\n");
+	fclose(f);
+
+	BackupInfo *b = pg_probackup_adapter.scan(tmp);
+	rm_rf(tmp);
+
+	ck_assert_ptr_nonnull(b);
+	ck_assert_str_eq(b->backup_id, "REALID");
+	free_backup_list(b);
+}
+END_TEST
+
 /* ------------------------------------------------------------------ *
  * Integration: real backup
  * ------------------------------------------------------------------ */
@@ -335,6 +369,7 @@ pg_probackup_suite(void)
 	tcase_add_test(tc_parse, test_parse_status_orphan);
 	tcase_add_test(tc_parse, test_parse_from_replica_standby);
 	tcase_add_test(tc_parse, test_parse_from_replica_primary);
+	tcase_add_test(tc_parse, test_parse_control_prefix_collision);
 	suite_add_tcase(s, tc_parse);
 
 	TCase *tc_int = tcase_create("Integration");
