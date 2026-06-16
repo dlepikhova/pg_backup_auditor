@@ -62,7 +62,6 @@ tests/unit/test_runner
 /description.md
 /PROJECT_STRUCTURE.md
 /TESTING.md
-/CHANGELOG.md
 /test_real_backups.sh
 docs/DEVELOPER.md
 docs/ARCHITECTURE.md
