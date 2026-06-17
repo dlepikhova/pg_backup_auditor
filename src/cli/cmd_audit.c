@@ -224,6 +224,13 @@ calculate_backup_stats(BackupInfo *backups, int *out_count)
 		if (b->data_bytes == 0 || b->start_time == 0 || b->end_time == 0)
 			continue;
 
+		/* Skip backups with non-positive duration (end <= start). Otherwise
+		 * zero-duration entries pull the average toward 0, and entries where
+		 * end < start (broken timestamps) feed a negative value into the
+		 * sum, corrupting the baseline for every real backup. */
+		if (b->end_time <= b->start_time)
+			continue;
+
 		BackupTypeStats *st = NULL;
 		for (int i = 0; i < stats_count; i++)
 		{
@@ -294,6 +301,12 @@ detect_anomalies(BackupInfo *backups, BackupTypeStats *stats, int stats_count, b
 
 		/* Skip if no data */
 		if (b->data_bytes == 0 || b->start_time == 0 || b->end_time == 0)
+			continue;
+
+		/* Skip backups with non-positive duration (end <= start). The
+		 * duration math below would otherwise produce a 0 or negative
+		 * multiplier and report a meaningless "Nx faster" anomaly. */
+		if (b->end_time <= b->start_time)
 			continue;
 
 		/* Find stats for this (tool, type) combination */
