@@ -1,6 +1,8 @@
 # pg_backup_auditor
 
-Cross-platform PostgreSQL backup auditor — unified analysis and validation tool for pg_basebackup, pg_probackup, and pgBackRest backups.
+**Will your PostgreSQL backups actually restore?** See at a glance whether every backup across your fleet is healthy and recoverable — chains intact, checksums valid, WAL coverage in place — with one report across `pg_basebackup`, `pg_probackup`, and `pgBackRest`. No more switching between tool-specific outputs and home-grown scripts to answer the same question.
+
+**Read-only by design.** pg_backup_auditor never writes to the backup catalog, manifests, WAL files, or status flags. Safe to point at production — it only reads what the backup tools have already written.
 
 ## Features
 
