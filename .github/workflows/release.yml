@@ -1,0 +1,82 @@
+name: Release Binaries
+
+# Triggered when a release is published in the GitHub UI (manually).
+# Builds binaries on the supported platforms and uploads them as
+# assets to that release. The release itself (notes, etc.) stays
+# under maintainer control — this workflow only adds the binaries.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Build on the older Ubuntu so the glibc requirement is
+          # broad enough to cover most production servers.
+          - os: ubuntu-22.04
+            target: linux-x86_64
+          - os: macos-14
+            target: macos-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget gnupg
+          sudo install -d /usr/share/postgresql-common/pgdg
+          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo tee /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc > /dev/null
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-17
+
+      - name: Install PostgreSQL (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install postgresql@17
+          echo "$(brew --prefix postgresql@17)/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: |
+          make clean
+          make
+
+      - name: Smoke test
+        run: |
+          ./pg_backup_auditor --version
+          ./pg_backup_auditor --help > /dev/null
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME}"
+          ARCHIVE="pg_backup_auditor-${VERSION}-${{ matrix.target }}.tar.gz"
+          # Stage files so the tarball extracts into a tidy directory.
+          STAGE="pg_backup_auditor-${VERSION}"
+          mkdir -p "${STAGE}"
+          cp pg_backup_auditor "${STAGE}/"
+          cp README.md LICENSE CHANGELOG.md RELEASES.md "${STAGE}/" 2>/dev/null || true
+          tar czf "dist/${ARCHIVE}" "${STAGE}"
+          (cd dist && sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256" 2>/dev/null \
+            || shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256")
+          ls -la dist/
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.sha256 \
+            --clobber --repo "${GITHUB_REPOSITORY}"
