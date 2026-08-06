@@ -103,6 +103,81 @@ pg_backup_auditor audit -B /var/lib/pgbackup --wal-archive=/var/lib/wal
 pg_backup_auditor audit -B /var/lib/pgbackup --detect-size-small
 ```
 
+## How to
+
+### Check if all backups across the fleet are healthy
+
+```bash
+pg_backup_auditor audit -B /var/lib/pgbackup
+```
+
+Look at the Verdict line (OK / WARNING / CRITICAL) and CHAINS status. The Anomalies section flags backups with unusual size or duration.
+
+### Investigate a specific backup after a failed restore
+
+```bash
+pg_backup_auditor info  -B /var/lib/pgbackup -i 20260315-020000
+pg_backup_auditor check -B /var/lib/pgbackup -i 20260315-020000 --level=checksums
+```
+
+`info` shows metadata; `check` with `--level=checksums` validates per-file integrity and WAL availability.
+
+### Find the last valid backup before an incident
+
+```bash
+pg_backup_auditor list -B /var/lib/pgbackup --sort-by=start_time --reverse --status=ok
+```
+
+Newest OK backups first — scan down to the one just before the incident timestamp, then investigate it with `info` / `check` above. (A direct `--before=<date>` filter is planned for a future release.)
+
+### Plan storage capacity for next quarter
+
+```bash
+pg_backup_auditor stat -B /var/lib/pgbackup
+```
+
+`DATABASE GROWTH TREND` shows net size change and monthly rate. `STORAGE > WAL Archive Volume` shows WAL bytes per day per instance.
+
+### Compare backup timings before and after a PostgreSQL upgrade
+
+Before the upgrade, save the current baseline:
+
+```bash
+pg_backup_auditor stat -B /var/lib/pgbackup > pre-upgrade.txt
+```
+
+After several new backups have run post-upgrade:
+
+```bash
+pg_backup_auditor stat -B /var/lib/pgbackup
+```
+
+Compare `Avg Duration` per (tool, type). A regression there often points to I/O or checksum overhead in the new PostgreSQL version. Make sure the `Interval` column shows the same cadence — otherwise you're comparing different schedules.
+
+### See the shape of the backup history
+
+```bash
+pg_backup_auditor list -B /var/lib/pgbackup --sort-by=start_time
+```
+
+Tree display shows chains and their WAL mode (stream / archive / mixed).
+
+### Find orphaned backups (incrementals whose FULL is gone)
+
+```bash
+pg_backup_auditor audit -B /var/lib/pgbackup
+```
+
+Look at the `Orphaned` section in the audit output.
+
+### Validate the entire WAL archive, not just backup ranges
+
+```bash
+pg_backup_auditor check -B /var/lib/pgbackup --level=full
+```
+
+Level `full` scans every WAL segment in the archive (headers, CRC32C), catching segments swapped or corrupted outside individual backup LSN ranges.
+
 ## Commands
 
 ### `list`
@@ -222,6 +297,34 @@ pg_backup_auditor stat --backup-dir=PATH [OPTIONS]
 
 **Interval column:** average time between consecutive backups within the group, computed as `(max_time − min_time) / (count − 1)`. Shown as `N/A` when fewer than 2 backups exist.
 
+## Historical Analysis
+
+By design, pg_backup_auditor is a **stateless on-demand tool** — it maintains no database of its own, and each run is independent. Historical analysis works on whatever your backup catalog already retains, going back as far as your backup tool's retention policy keeps backups around.
+
+### What you can look back at
+
+- **`list`** — full catalog view with filtering by tool/status and sorting; see the shape of your backup history over the retained window
+- **`info`** — deep dive into any past backup: LSN range, timeline, chain position, storage, timings, WAL mode
+- **`audit`** — retrospective assessment across all chains:
+  - Oldest and latest recovery points per chain
+  - RPO gaps between consecutive backups
+  - Orphaned backups (incrementals whose FULL is gone)
+  - Size and duration anomalies against per-(tool, type) baseline
+- **`stat`** — aggregate metrics over the retained history:
+  - Backup counts, sizes, durations, success rate per (tool, type)
+  - Average interval between backups
+  - **Database growth trend**: net size change between the first and last FULL backup plus a monthly rate
+  - **Incremental efficiency**: DELTA/PAGE/PTRACK/INCREMENTAL as % of FULL size
+  - **WAL archive volume per day** per tool and instance
+
+### Scope and boundaries
+
+- **Bounded by retention.** Once your backup tool deletes a backup, it is gone — no auditor can bring it back. Deep-history analysis needs a matching retention policy.
+- **No between-backup data.** The tool sees only what backups recorded. There is no continuous monitoring, no time-series metrics, no data about the periods between backups.
+- **Independent runs.** Each invocation reads the catalog fresh. There is no persistent log to consult — if a fact was not visible at run time, it will not be available later.
+
+For long-term trends beyond retention, or for real-time alerting, pair pg_backup_auditor with a general-purpose observability stack (metrics scraper + storage + dashboards). pg_backup_auditor itself intentionally stays focused on on-demand audit.
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -258,6 +361,7 @@ pg_basebackup and pg_probackup adapters work with the PostgreSQL version that cr
 
 ## Planned for v0.4.0
 
+- **Time-range filters** (`--since=<date>`, `--before=<date>`) for `list`, `audit`, and `stat`: bound analysis to a specific window instead of the full catalog. Enables "find the last valid backup before an incident" without manual scanning.
 - **WAL cleanup recommendations** in `audit`: identify oldest WAL segments safe to delete based on the oldest recovery point across all chains.
 - **RPO compliance check** in `audit`: compare actual RPO gap against a configurable target (`--rpo-target=24h`).
 - **Backup distribution analysis** in `audit`: detect schedule gaps and irregular intervals.
