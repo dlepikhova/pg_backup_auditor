@@ -1,18 +1,39 @@
 name: Release Binaries
 
-# Triggered when a release is published in the GitHub UI (manually).
-# Builds binaries on the supported platforms and uploads them as
-# assets to that release. The release itself (notes, etc.) stays
-# under maintainer control — this workflow only adds the binaries.
+# Two ways to run:
+#   1. Automatic: when a release is published in the GitHub UI, this
+#      workflow builds binaries on the supported platforms and uploads
+#      them as assets to that release. The release itself (notes, etc.)
+#      stays under maintainer control — this workflow only adds the
+#      binaries.
+#   2. Manual (workflow_dispatch): re-run against an existing release
+#      tag from Actions → "Release Binaries" → Run workflow. Useful for
+#      dry-running the pipeline on an older release, re-uploading if a
+#      binary was found to be broken, or rebuilding after fixing this
+#      workflow itself.
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to upload binaries to (e.g. v0.3.0)'
+        required: true
+
+permissions:
+  contents: write   # gh release upload writes to release assets
 
 jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    # Single source of truth for the target release tag, whether the
+    # workflow was triggered automatically (release.published sets
+    # github.ref_name to the tag) or manually (the tag comes from
+    # workflow_dispatch inputs; ref_name in that case is the branch).
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -27,6 +48,13 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Build from the exact tag we're going to upload to, not
+          # HEAD of the default branch. Matters for manual runs where
+          # the workflow is triggered against an older tag; for the
+          # automatic release.published trigger this resolves to the
+          # same commit either way.
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install PostgreSQL (Linux)
         if: runner.os == 'Linux'
@@ -62,10 +90,9 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          VERSION="${GITHUB_REF_NAME}"
-          ARCHIVE="pg_backup_auditor-${VERSION}-${{ matrix.target }}.tar.gz"
+          ARCHIVE="pg_backup_auditor-${RELEASE_TAG}-${{ matrix.target }}.tar.gz"
           # Stage files so the tarball extracts into a tidy directory.
-          STAGE="pg_backup_auditor-${VERSION}"
+          STAGE="pg_backup_auditor-${RELEASE_TAG}"
           mkdir -p "${STAGE}"
           cp pg_backup_auditor "${STAGE}/"
           cp README.md LICENSE CHANGELOG.md RELEASES.md "${STAGE}/" 2>/dev/null || true
@@ -78,5 +105,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.sha256 \
+          gh release upload "${RELEASE_TAG}" dist/*.tar.gz dist/*.sha256 \
             --clobber --repo "${GITHUB_REPOSITORY}"
