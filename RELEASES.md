@@ -1,6 +1,51 @@
 # pg_backup_auditor Release History
 
-## [v0.3.0](https://github.com/daria-lepikhova/pg_backup_auditor/releases/tag/v0.3.0) - 2026-06-16
+## [v0.3.1](https://github.com/dlepikhova/pg_backup_auditor/releases/tag/v0.3.1) - 2026-06-22
+
+**Patch release: `audit` anomaly baseline fix, README rewrite around DBA tasks, and pre-built binaries in GitHub Releases.**
+
+### Fixed
+
+- **`audit` anomaly baseline** — backups with `end_time <= start_time` (structurally invalid timestamps from broken `backup_label` files) no longer pollute the per-(tool, type) average duration. Legitimate short backups no longer appear with astronomical multipliers like `51742.8x faster than avg`.
+
+### Documentation
+
+- **README lead rewritten** to open with a DBA-facing question ("Will your PostgreSQL backups actually restore?") instead of a tool-centric description. Explicit **Read-only by design** paragraph — safe to point at a production catalog.
+- **New How to section** with eight task-shaped recipes (fleet health check, investigating a specific backup, finding the last valid backup before an incident, capacity planning, comparing timings before/after a PostgreSQL upgrade, and more).
+- **New Historical Analysis section** documenting what retrospective analysis the tool provides today and its stateless-by-design boundaries.
+
+### Infrastructure
+
+- **Pre-built binaries in GitHub Releases** — `linux-x86_64` and `macos-arm64` tarballs (with SHA256 checksums) are attached automatically to every published release. See release Assets for direct downloads.
+
+### Roadmap update
+
+- **`--since` / `--before` time-range filters** for `list`, `audit`, and `stat` added to the v0.4.0 plan, motivated by the "find the last valid backup before an incident" use case.
+
+### Installation
+
+```bash
+# Download pre-built binary (Linux x86_64)
+curl -LO https://github.com/dlepikhova/pg_backup_auditor/releases/download/v0.3.1/pg_backup_auditor-v0.3.1-linux-x86_64.tar.gz
+tar xzf pg_backup_auditor-v0.3.1-linux-x86_64.tar.gz
+sudo install pg_backup_auditor-v0.3.1/pg_backup_auditor /usr/local/bin/
+
+# Or build from source (unchanged)
+git clone https://github.com/dlepikhova/pg_backup_auditor.git
+cd pg_backup_auditor && git checkout v0.3.1
+meson setup builddir && ninja -C builddir
+sudo ninja -C builddir install
+```
+
+### Migration from v0.3.0
+
+No breaking changes. All improvements are additive or documentation-only.
+
+**Full Changelog**: [v0.3.0...v0.3.1](https://github.com/dlepikhova/pg_backup_auditor/compare/v0.3.0...v0.3.1)
+
+---
+
+## [v0.3.0](https://github.com/dlepikhova/pg_backup_auditor/releases/tag/v0.3.0) - 2026-06-16
 
 **Minor release: New `stat` command, anomaly detection in `audit`, and internal cleanup.**
 
@@ -59,7 +104,7 @@ pg_backup_auditor stat -B /var/lib/pgbackup
 ### Installation
 
 ```bash
-git clone https://github.com/daria-lepikhova/pg_backup_auditor.git
+git clone https://github.com/dlepikhova/pg_backup_auditor.git
 cd pg_backup_auditor
 meson setup builddir && ninja -C builddir
 sudo ninja -C builddir install
@@ -69,11 +114,11 @@ sudo ninja -C builddir install
 
 No breaking changes. The new `stat` command and `audit` anomaly detection are additive. The internal refactorings (`backup_chain.c`, `*_from_string`, `parse_string_option`) do not affect user-visible behavior or CLI surface.
 
-**Full Changelog**: [v0.2.0...v0.3.0](https://github.com/daria-lepikhova/pg_backup_auditor/compare/v0.2.0...v0.3.0)
+**Full Changelog**: [v0.2.0...v0.3.0](https://github.com/dlepikhova/pg_backup_auditor/compare/v0.2.0...v0.3.0)
 
 ---
 
-## [v0.2.0](https://github.com/daria-lepikhova/pg_backup_auditor/releases/tag/v0.2.0) - 2026-04-16
+## [v0.2.0](https://github.com/dlepikhova/pg_backup_auditor/releases/tag/v0.2.0) - 2026-04-16
 
 **Major release: Critical bug fixes, security hardening, and comprehensive test coverage.**
 
@@ -123,7 +168,7 @@ No breaking changes. The new `stat` command and `audit` anomaly detection are ad
 ### Installation
 
 ```bash
-git clone https://github.com/daria-lepikhova/pg_backup_auditor.git
+git clone https://github.com/dlepikhova/pg_backup_auditor.git
 cd pg_backup_auditor
 meson setup builddir && ninja -C builddir
 sudo ninja -C builddir install
@@ -135,7 +180,7 @@ No breaking changes. Enhanced validation will catch additional issues previously
 
 ---
 
-## [v0.1.0](https://github.com/daria-lepikhova/pg_backup_auditor/releases/tag/v0.1.0) - 2026-04-06
+## [v0.1.0](https://github.com/dlepikhova/pg_backup_auditor/releases/tag/v0.1.0) - 2026-04-06
 
 **First public release: Cross-platform PostgreSQL backup auditor.**
 

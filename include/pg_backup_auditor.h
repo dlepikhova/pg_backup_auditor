@@ -29,10 +29,10 @@
 #include "common.h"
 
 /* Version information */
-#define PG_BACKUP_AUDITOR_VERSION "0.3.0"
+#define PG_BACKUP_AUDITOR_VERSION "0.3.1"
 #define PG_BACKUP_AUDITOR_VERSION_MAJOR 0
 #define PG_BACKUP_AUDITOR_VERSION_MINOR 3
-#define PG_BACKUP_AUDITOR_VERSION_PATCH 0
+#define PG_BACKUP_AUDITOR_VERSION_PATCH 1
 
 /* Global initialization and cleanup */
 void pg_backup_auditor_init(void);

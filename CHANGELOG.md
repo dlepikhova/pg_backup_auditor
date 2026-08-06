@@ -4,6 +4,23 @@ All notable changes to pg_backup_auditor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.3.1] - 2026-06-22
+
+### Fixed
+
+- `audit` anomaly detection: entries with zero or negative duration (structurally invalid `end_time <= start_time` from broken `backup_label` timestamps) no longer pollute the per-(tool, type) baseline. They previously inflated the average duration to unrealistic values and caused legitimate short backups to display astronomical multipliers (`51742.8x faster than avg`).
+
+### Changed
+
+- README lead rewritten to open with the DBA's question ("Will your PostgreSQL backups actually restore?") instead of a tool-centric description. Adds an explicit "Read-only by design" paragraph so users can safely point the tool at a production catalog.
+- New README section **How to** with eight task-shaped recipes: fleet health check, investigating a specific backup, finding the last valid backup before an incident, capacity planning, comparing timings before/after a PostgreSQL upgrade, seeing the shape of backup history, finding orphaned backups, full WAL archive validation.
+- New README section **Historical Analysis** documenting what retrospective analysis the tool already provides and its stateless-by-design boundaries.
+- Roadmap: added `--since` / `--before` time-range filters as a planned v0.4.0 feature.
+
+### Infrastructure
+
+- New release workflow (`.github/workflows/release.yml`): pre-built binaries for `linux-x86_64` and `macos-arm64` are attached automatically to every published GitHub release. Triggered on `release: published`; also supports `workflow_dispatch` for manual re-uploads or dry-runs against existing tags. Ubuntu 22.04 is used as the Linux build host so the resulting binary's glibc requirement is broad enough for most production servers.
+
 ## [0.3.0] - 2026-06-16
 
 ### Added
