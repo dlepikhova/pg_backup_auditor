@@ -24,6 +24,7 @@
 #define ARG_PARSER_H
 
 #include <stdbool.h>
+#include <time.h>
 
 /*
  * Check if an option has been seen multiple times and report error
@@ -37,6 +38,17 @@ bool check_duplicate_option(bool seen, const char *option_name);
  */
 bool parse_string_option(const char *option_name, const char *value,
                         char **target, bool *seen);
+
+/*
+ * Parse a DATE-valued CLI option in strict DD-MM-YYYY format. On success
+ * writes the parsed time_t (00:00:00 local time of that date) to *target,
+ * marks *seen, and returns true. On duplicate, malformed input (wrong
+ * length, non-digit chars, missing dashes), out-of-range year (1970..2100),
+ * or invalid calendar date (e.g. 31-02-2026), prints an error and returns
+ * false.
+ */
+bool parse_date_option(const char *option_name, const char *value,
+                       time_t *target, bool *seen);
 
 /*
  * Parse an integer argument and validate it

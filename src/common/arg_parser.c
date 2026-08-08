@@ -23,8 +23,11 @@
 #include "arg_parser.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <time.h>
 
 /*
  * Check if an option has been seen multiple times and report error
@@ -52,6 +55,74 @@ parse_string_option(const char *option_name, const char *value,
 	if (check_duplicate_option(*seen, option_name))
 		return false;
 	*target = (char *)value;
+	*seen = true;
+	return true;
+}
+
+/*
+ * Parse a DATE-valued CLI option in strict DD-MM-YYYY format.
+ * See arg_parser.h for the full contract.
+ */
+bool
+parse_date_option(const char *option_name, const char *value,
+				  time_t *target, bool *seen)
+{
+	if (check_duplicate_option(*seen, option_name))
+		return false;
+
+	/* Strict format: exactly "DD-MM-YYYY" — 10 chars, dashes at
+	 * positions 2 and 5, digits everywhere else. Zero-padding is
+	 * required (e.g. "08-01-2026", not "8-1-2026"). */
+	if (value == NULL || strlen(value) != 10 ||
+		value[2] != '-' || value[5] != '-' ||
+		!isdigit((unsigned char)value[0]) || !isdigit((unsigned char)value[1]) ||
+		!isdigit((unsigned char)value[3]) || !isdigit((unsigned char)value[4]) ||
+		!isdigit((unsigned char)value[6]) || !isdigit((unsigned char)value[7]) ||
+		!isdigit((unsigned char)value[8]) || !isdigit((unsigned char)value[9]))
+	{
+		fprintf(stderr,
+				"Error: Invalid date format for %s: '%s'. "
+				"Expected DD-MM-YYYY (e.g. 15-08-2026)\n",
+				option_name, value ? value : "(null)");
+		return false;
+	}
+
+	int day   = (value[0] - '0') * 10 + (value[1] - '0');
+	int month = (value[3] - '0') * 10 + (value[4] - '0');
+	int year  = (value[6] - '0') * 1000 + (value[7] - '0') * 100 +
+				(value[8] - '0') * 10   + (value[9] - '0');
+
+	if (year < 1970 || year > 2100)
+	{
+		fprintf(stderr,
+				"Error: Year out of range for %s: %d. Expected 1970..2100\n",
+				option_name, year);
+		return false;
+	}
+
+	struct tm tm = {
+		.tm_mday  = day,
+		.tm_mon   = month - 1,     /* tm_mon is 0..11 */
+		.tm_year  = year - 1900,   /* tm_year is years since 1900 */
+		.tm_isdst = -1,            /* let mktime resolve DST */
+	};
+
+	time_t t = mktime(&tm);
+	/* mktime silently normalizes overflow (e.g. day 31 in a 30-day
+	 * month, or Feb 30). Check that the parsed fields survived
+	 * normalization to catch invalid calendar dates. */
+	if (t == (time_t)-1 ||
+		tm.tm_mday != day ||
+		tm.tm_mon  != month - 1 ||
+		tm.tm_year != year - 1900)
+	{
+		fprintf(stderr,
+				"Error: Invalid calendar date for %s: '%s'\n",
+				option_name, value);
+		return false;
+	}
+
+	*target = t;
 	*seen = true;
 	return true;
 }
