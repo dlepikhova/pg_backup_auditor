@@ -217,7 +217,7 @@ calculate_backup_stats(BackupInfo *backups, int *out_count)
 	for (BackupInfo *b = backups; b != NULL; b = b->next)
 	{
 		/* Skip failed/incomplete backups */
-		if (b->status != BACKUP_STATUS_OK && b->status != BACKUP_STATUS_WARNING)
+		if (!backup_status_is_usable(b->status))
 			continue;
 
 		/* Skip if no data */
@@ -296,7 +296,7 @@ detect_anomalies(BackupInfo *backups, BackupTypeStats *stats, int stats_count, b
 	for (BackupInfo *b = backups; b != NULL; b = b->next)
 	{
 		/* Skip failed/incomplete backups */
-		if (b->status != BACKUP_STATUS_OK && b->status != BACKUP_STATUS_WARNING)
+		if (!backup_status_is_usable(b->status))
 			continue;
 
 		/* Skip if no data */
@@ -486,17 +486,15 @@ assess_chain_status(const BackupChain *chain)
 	if (chain->root == NULL)
 		return CHAIN_STATUS_BROKEN;  /* orphaned group: no FULL backup */
 
-	if (chain->root->status == BACKUP_STATUS_ERROR ||
-		chain->root->status == BACKUP_STATUS_CORRUPT)
+	/* A FULL that cannot be restored breaks the whole chain; one still
+	 * being written only degrades it. */
+	if (!backup_status_is_usable(chain->root->status) &&
+		chain->root->status != BACKUP_STATUS_RUNNING)
 		return CHAIN_STATUS_BROKEN;
 
 	for (int i = 0; i < chain->count; i++)
 	{
-		BackupInfo *b = chain->members[i];
-		if (b->status == BACKUP_STATUS_RUNNING)
-			return CHAIN_STATUS_DEGRADED;
-		if (b->status == BACKUP_STATUS_ERROR ||
-			b->status == BACKUP_STATUS_CORRUPT)
+		if (!backup_status_is_usable(chain->members[i]->status))
 			return CHAIN_STATUS_DEGRADED;
 	}
 
@@ -590,7 +588,7 @@ print_chain_audit(const BackupChain *chain, int chain_num, const WALArchiveInfo 
 		BackupInfo *b = chain->members[i];
 
 		/* Only count completed backups towards recovery points */
-		if (b->status != BACKUP_STATUS_OK && b->status != BACKUP_STATUS_WARNING)
+		if (!backup_status_is_usable(b->status))
 			continue;
 
 		if (oldest_time == 0 || b->start_time < oldest_time)

@@ -262,7 +262,7 @@ parse_control_line(const char *line, const char *key, char *value, size_t value_
  *
  * Parse backup.control file (key = value format):
  * - backup-mode = FULL|PAGE|DELTA|PTRACK
- * - status = OK|RUNNING|CORRUPT|ERROR|ORPHAN
+ * - status = OK|DONE|RUNNING|MERGING|MERGED|DELETING|DELETED|ERROR|ORPHAN|CORRUPT
  * - backup-id = <timestamp>
  * - start-lsn = <lsn>
  * - stop-lsn = <lsn>
@@ -310,6 +310,9 @@ pg_probackup_read_metadata(const char *backup_path, BackupInfo *info)
 				info->type = BACKUP_TYPE_DELTA;
 			else if (strcmp(value, "PTRACK") == 0)
 				info->type = BACKUP_TYPE_PTRACK;
+			else
+				log_warning("Unknown pg_probackup backup-mode \"%s\" in %s",
+							value, control_path);
 			value[0] = '\0';
 			continue;
 		}
@@ -328,6 +331,19 @@ pg_probackup_read_metadata(const char *backup_path, BackupInfo *info)
 				info->status = BACKUP_STATUS_ERROR;
 			else if (strcmp(value, "ORPHAN") == 0)
 				info->status = BACKUP_STATUS_ORPHAN;
+			else if (strcmp(value, "DONE") == 0)
+				info->status = BACKUP_STATUS_DONE;
+			else if (strcmp(value, "MERGING") == 0)
+				info->status = BACKUP_STATUS_MERGING;
+			else if (strcmp(value, "MERGED") == 0)
+				info->status = BACKUP_STATUS_MERGED;
+			else if (strcmp(value, "DELETING") == 0)
+				info->status = BACKUP_STATUS_DELETING;
+			else if (strcmp(value, "DELETED") == 0)
+				info->status = BACKUP_STATUS_DELETED;
+			else
+				log_warning("Unknown pg_probackup status \"%s\" in %s",
+							value, control_path);
 			value[0] = '\0';
 			continue;
 		}

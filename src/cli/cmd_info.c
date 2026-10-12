@@ -38,19 +38,7 @@ typedef struct {
 static const char *
 get_status_color(BackupStatus status)
 {
-	if (!use_color)
-		return "";
-
-	if (status == BACKUP_STATUS_OK)
-		return COLOR_GREEN;
-	if (status == BACKUP_STATUS_ERROR || status == BACKUP_STATUS_CORRUPT)
-		return COLOR_RED;
-	if (status == BACKUP_STATUS_WARNING || status == BACKUP_STATUS_ORPHAN)
-		return COLOR_YELLOW;
-	if (status == BACKUP_STATUS_RUNNING)
-		return COLOR_CYAN;
-
-	return "";
+	return use_color ? backup_status_color(status) : "";
 }
 
 static void

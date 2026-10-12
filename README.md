@@ -192,7 +192,7 @@ pg_backup_auditor list --backup-dir=PATH [OPTIONS]
 |--------|-------------|
 | `--backup-dir=PATH, -B PATH` | Backup directory (required) |
 | `--type=TYPE` | Filter: `auto`, `pg_basebackup`, `pg_probackup`, `pgbackrest` |
-| `--status=STATUS` | Filter: `all`, `ok`, `warning`, `error`, `corrupt`, `orphan`, `running` |
+| `--status=STATUS` | Filter: `all`, `ok`, `done`, `warning`, `error`, `corrupt`, `orphan`, `running`, `merging`, `merged`, `deleting`, `deleted`, `unknown` |
 | `--sort-by=FIELD` | Sort: `start_time` (default), `end_time`, `name`, `size` |
 | `--reverse, -r` | Reverse sort order |
 | `--limit=N, -n N` | Limit total output to N backups |
@@ -224,6 +224,8 @@ pg_backup_auditor check --backup-dir=PATH [OPTIONS]
 | 2 | `standard` | Timestamps, LSN range, timeline, pg version *(default)* |
 | 3 | `checksums` | Per-file checksums, WAL availability, continuity, restore chain, header validation |
 | 4 | `full` | All previous + archive-wide WAL header scan |
+
+**Backup statuses.** Statuses come from the backup tool's own metadata. OK, DONE and WARNING are treated as usable, following pg_probackup, which restores and validates only OK and DONE backups. `check` skips ERROR, CORRUPT, DELETING and DELETED backups, and MERGING and MERGED backups with a hint to rerun `pg_probackup merge`. A status the tool does not recognize is shown as UNKNOWN and reported as a validation error.
 
 ### `info`
 
@@ -291,7 +293,7 @@ pg_backup_auditor stat --backup-dir=PATH [OPTIONS]
 | Section | Description |
 |---------|-------------|
 | **Statistics by group** | Per-(tool, type, instance) table: count, average interval between backups, total/avg size, avg duration, OK% |
-| **STORAGE** | Total counts and sizes broken down by status (OK, WARNING, ERROR, CORRUPT, ORPHAN, RUNNING); WAL archive volume per day per tool/instance |
+| **STORAGE** | Total counts and sizes broken down by status (OK, DONE, WARNING, ERROR, CORRUPT, ORPHAN, RUNNING, MERGING, MERGED, DELETING, DELETED, UNKNOWN); WAL archive volume per day per tool/instance |
 | **DATABASE GROWTH TREND** | Per tool/instance: net size change between the first and last FULL backup, plus a monthly rate. Intermediate fluctuations (e.g. stream-mode WAL noise) cancel out. Useful for capacity planning (e.g. "need +X GB/month") |
 | **INCREMENTAL EFFICIENCY** | Average size of non-FULL backups as a percentage of FULL size: low % = efficient incrementals; high % = strategy issue |
 
@@ -330,9 +332,8 @@ For long-term trends beyond retention, or for real-time alerting, pair pg_backup
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | General error |
-| 2 | Validation failed |
-| 3 | Critical error / no backups found |
+| 1 | General error: directory not found, no backups found, `--backup-id` not found |
+| 2 | Validation failed: errors or warnings found, or no backup was eligible for validation |
 | 4 | Invalid arguments |
 
 ## Supported Platforms

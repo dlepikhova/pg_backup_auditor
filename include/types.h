@@ -37,8 +37,9 @@
 typedef uint64_t XLogRecPtr;
 typedef uint32_t TimeLineID;
 
-/* Backup types */
+/* Backup types; zero value is UNKNOWN so unparsed metadata is never FULL */
 typedef enum {
+	BACKUP_TYPE_UNKNOWN,
 	BACKUP_TYPE_FULL,
 	BACKUP_TYPE_INCREMENTAL,  /* pg_basebackup 17+ incremental */
 	BACKUP_TYPE_PAGE,
@@ -54,15 +55,23 @@ typedef enum {
 	BACKUP_TOOL_PGBACKREST
 } BackupTool;
 
-/* Backup status */
+/* Backup status; zero value is UNKNOWN so unparsed metadata is never OK */
 typedef enum {
+	BACKUP_STATUS_UNKNOWN,
 	BACKUP_STATUS_OK,
 	BACKUP_STATUS_RUNNING,
 	BACKUP_STATUS_CORRUPT,
 	BACKUP_STATUS_ERROR,
 	BACKUP_STATUS_ORPHAN,
-	BACKUP_STATUS_WARNING
+	BACKUP_STATUS_WARNING,
+	BACKUP_STATUS_DONE,		/* pg_probackup: completed but not validated yet */
+	BACKUP_STATUS_MERGING,	/* pg_probackup: merge interrupted, rerun merge */
+	BACKUP_STATUS_MERGED,	/* pg_probackup: merge interrupted before rename, rerun merge */
+	BACKUP_STATUS_DELETING,
+	BACKUP_STATUS_DELETED
 } BackupStatus;
+
+#define BACKUP_STATUS_COUNT (BACKUP_STATUS_DELETED + 1)
 
 /* Validation level */
 typedef enum {
@@ -100,6 +109,7 @@ typedef struct BackupInfo {
 	char            wal_start_file[64]; /* WAL filename from START WAL LOCATION */
 	char            compress_alg[32];   /* Compression algorithm: none, gzip, zstd, lz4, etc. */
 	char            wal_mode[16];       /* Display label: tool-specific WAL mode */
+	bool            checksum_page_error; /* Tool metadata reports page checksum errors */
 	struct BackupInfo *next;
 } BackupInfo;
 
