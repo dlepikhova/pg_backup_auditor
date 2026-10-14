@@ -39,6 +39,36 @@ typedef struct {
 	bool skip_wal;
 } CheckOptions;
 
+/*
+ * Statuses for which validation is pointless: the tool itself will not
+ * restore such a backup.  Returns a hint for the user, or NULL if the
+ * backup should be validated.  UNKNOWN is validated on purpose so the
+ * metadata error is reported instead of being hidden as SKIPPED.
+ */
+static const char *
+skip_hint(BackupStatus status)
+{
+	switch (status)
+	{
+		case BACKUP_STATUS_ERROR:
+		case BACKUP_STATUS_CORRUPT:
+		case BACKUP_STATUS_DELETING:
+		case BACKUP_STATUS_DELETED:
+			return "validation not performed";
+		case BACKUP_STATUS_MERGING:
+		case BACKUP_STATUS_MERGED:
+			return "merge was interrupted, rerun pg_probackup merge";
+		case BACKUP_STATUS_UNKNOWN:
+		case BACKUP_STATUS_OK:
+		case BACKUP_STATUS_DONE:
+		case BACKUP_STATUS_WARNING:
+		case BACKUP_STATUS_RUNNING:
+		case BACKUP_STATUS_ORPHAN:
+			return NULL;
+	}
+	return NULL;
+}
+
 static void
 init_options(CheckOptions *opts)
 {
@@ -207,6 +237,15 @@ cmd_check_main(int argc, char **argv)
 		return EXIT_GENERAL_ERROR;
 	}
 
+	if (opts.backup_id != NULL &&
+		backup_chain_find_backup(backups, opts.backup_id) == NULL)
+	{
+		fprintf(stderr, "Error: Backup not found: %s in %s\n",
+				opts.backup_id, opts.backup_dir);
+		free_backup_list(backups);
+		return EXIT_GENERAL_ERROR;
+	}
+
 	/* Scan WAL archive if provided and WAL checks are not skipped */
 	if (!opts.skip_wal && opts.wal_archive != NULL &&
 		opts.level >= VALIDATION_LEVEL_CHECKSUMS)
@@ -279,12 +318,12 @@ cmd_check_main(int argc, char **argv)
 				   use_color ? COLOR_BOLD : "", use_color ? COLOR_RESET : "",
 				   cur->backup_id, backup_tool_to_string(cur->tool));
 
-			if (cur->status == BACKUP_STATUS_ERROR ||
-				cur->status == BACKUP_STATUS_CORRUPT)
+			const char *hint = skip_hint(cur->status);
+			if (hint != NULL)
 			{
-				printf("  %s[SKIPPED]%s Status: %s - validation not performed\n",
+				printf("  %s[SKIPPED]%s Status: %s - %s\n",
 					   use_color ? COLOR_CYAN  : "", use_color ? COLOR_RESET : "",
-					   backup_status_to_string(cur->status));
+					   backup_status_to_string(cur->status), hint);
 				backups_skipped++;
 			}
 			else
@@ -370,13 +409,13 @@ cmd_check_main(int argc, char **argv)
 					printf("  ->  parent: %s", cur->parent_backup_id);
 				printf("\n");
 
-				if (cur->status == BACKUP_STATUS_ERROR ||
-					cur->status == BACKUP_STATUS_CORRUPT)
+				const char *hint = skip_hint(cur->status);
+				if (hint != NULL)
 				{
-					printf("%s  %s[SKIPPED]%s Status: %s - validation not performed\n",
+					printf("%s  %s[SKIPPED]%s Status: %s - %s\n",
 						   indent,
 						   use_color ? COLOR_CYAN  : "", use_color ? COLOR_RESET : "",
-						   backup_status_to_string(cur->status));
+						   backup_status_to_string(cur->status), hint);
 					backups_skipped++;
 					continue;
 				}
@@ -499,7 +538,7 @@ cmd_check_main(int argc, char **argv)
 	printf("  Total backups found:    %d\n", backup_count);
 	printf("  Backups validated:      %d\n", backups_validated);
 	if (backups_skipped > 0)
-		printf("  Backups skipped:        %d (ERROR/CORRUPT status)\n", backups_skipped);
+		printf("  Backups skipped:        %d (status not eligible for validation)\n", backups_skipped);
 	printf("----------------------------------------------------\n");
 	printf("  Validation errors:      %d\n", total_errors);
 	printf("  Validation warnings:    %d\n", total_warnings);
@@ -518,7 +557,7 @@ cmd_check_main(int argc, char **argv)
 		printf("  %d validation error%s found in checked backups.\n",
 			   total_errors, total_errors == 1 ? "" : "s");
 		if (backups_skipped > 0)
-			printf("  %d backup%s skipped due to ERROR/CORRUPT status.\n",
+			printf("  %d backup%s skipped due to their status.\n",
 				   backups_skipped, backups_skipped == 1 ? " was" : "s were");
 		return EXIT_VALIDATION_FAILED;
 	}
@@ -529,7 +568,7 @@ cmd_check_main(int argc, char **argv)
 		printf("  %d validation warning%s found in checked backups.\n",
 			   total_warnings, total_warnings == 1 ? "" : "s");
 		if (backups_skipped > 0)
-			printf("  %d backup%s skipped due to ERROR/CORRUPT status.\n",
+			printf("  %d backup%s skipped due to their status.\n",
 				   backups_skipped, backups_skipped == 1 ? " was" : "s were");
 		return EXIT_VALIDATION_FAILED;
 	}
@@ -539,9 +578,10 @@ cmd_check_main(int argc, char **argv)
 		{
 			printf("\n%sResult: NO VALIDATION PERFORMED%s\n",
 				   use_color ? COLOR_CYAN : "", use_color ? COLOR_RESET : "");
-			printf("  All %d backup%s skipped (ERROR/CORRUPT status).\n",
+			printf("  All %d backup%s skipped (status not eligible for validation).\n",
 				   backups_skipped, backups_skipped == 1 ? " was" : "s were");
 			printf("  No backups were available for validation.\n");
+			return EXIT_VALIDATION_FAILED;
 		}
 		else
 		{
@@ -550,7 +590,7 @@ cmd_check_main(int argc, char **argv)
 			printf("  All %d validated backup%s passed checks successfully.\n",
 				   backups_validated, backups_validated == 1 ? "" : "s");
 			if (backups_skipped > 0)
-				printf("  %d backup%s skipped due to ERROR/CORRUPT status.\n",
+				printf("  %d backup%s skipped due to their status.\n",
 					   backups_skipped, backups_skipped == 1 ? " was" : "s were");
 		}
 		return EXIT_SUCCESS;

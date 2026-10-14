@@ -332,11 +332,9 @@ print_growth_efficiency(BackupInfo *backups, StatGroup *groups, int group_count)
 	{
 		/* Growth analysis is only meaningful for healthy backups:
 		 * stub/corrupt/in-progress entries have unreliable sizes and
-		 * timestamps that distort both axes. OK and WARNING are
-		 * considered usable; ERROR/CORRUPT/ORPHAN/RUNNING are not. */
+		 * timestamps that distort both axes (see backup_status_is_usable). */
 		if (b->type == BACKUP_TYPE_FULL
-			&& (b->status == BACKUP_STATUS_OK
-				|| b->status == BACKUP_STATUS_WARNING)
+			&& backup_status_is_usable(b->status)
 			&& b->data_bytes > 0
 			&& b->start_time > 0)
 		{
@@ -590,7 +588,7 @@ cmd_stat_main(int argc, char **argv)
 				g->duration_count++;
 			}
 		}
-		if (b->status == BACKUP_STATUS_OK)
+		if (backup_status_is_usable(b->status))
 			g->ok_count++;
 	}
 
@@ -682,105 +680,51 @@ cmd_stat_main(int argc, char **argv)
 		printf("%sSTORAGE%s\n", col, rst);
 
 		/* Count by status */
-		int ok_count = 0, warning_count = 0, error_count = 0, corrupt_count = 0, orphan_count = 0, running_count = 0;
-		uint64_t ok_bytes = 0, warning_bytes = 0, error_bytes = 0, corrupt_bytes = 0, orphan_bytes = 0, running_bytes = 0;
+		int      status_count[BACKUP_STATUS_COUNT] = {0};
+		uint64_t status_bytes[BACKUP_STATUS_COUNT] = {0};
+		int      total_count = 0;
+		uint64_t total_bytes = 0;
 
 		for (BackupInfo *b = backups; b != NULL; b = b->next)
 		{
 			uint64_t size = b->data_bytes + b->wal_bytes;
-			switch (b->status)
-			{
-				case BACKUP_STATUS_OK:
-					ok_count++;
-					ok_bytes += size;
-					break;
-				case BACKUP_STATUS_WARNING:
-					warning_count++;
-					warning_bytes += size;
-					break;
-				case BACKUP_STATUS_ERROR:
-					error_count++;
-					error_bytes += size;
-					break;
-				case BACKUP_STATUS_CORRUPT:
-					corrupt_count++;
-					corrupt_bytes += size;
-					break;
-				case BACKUP_STATUS_ORPHAN:
-					orphan_count++;
-					orphan_bytes += size;
-					break;
-				case BACKUP_STATUS_RUNNING:
-					running_count++;
-					running_bytes += size;
-					break;
-			}
+			status_count[b->status]++;
+			status_bytes[b->status] += size;
+			total_count++;
+			total_bytes += size;
 		}
-
-		int total_count = ok_count + warning_count + error_count + corrupt_count + orphan_count + running_count;
-		uint64_t total_bytes = ok_bytes + warning_bytes + error_bytes + corrupt_bytes + orphan_bytes + running_bytes;
 
 		printf("  Status          Count   Size\n");
 		printf("  ─────────────────────────────────\n");
 
-		if (ok_count > 0)
+		/* Usable statuses first, then the rest in enum order */
+		static const BackupStatus order[] = {
+			BACKUP_STATUS_OK, BACKUP_STATUS_DONE, BACKUP_STATUS_WARNING,
+			BACKUP_STATUS_ERROR, BACKUP_STATUS_CORRUPT, BACKUP_STATUS_ORPHAN,
+			BACKUP_STATUS_RUNNING, BACKUP_STATUS_MERGING, BACKUP_STATUS_MERGED,
+			BACKUP_STATUS_DELETING, BACKUP_STATUS_DELETED, BACKUP_STATUS_UNKNOWN
+		};
+		_Static_assert(sizeof(order) / sizeof(order[0]) == BACKUP_STATUS_COUNT,
+					   "every status must be listed in STORAGE order");
+		for (size_t i = 0; i < sizeof(order) / sizeof(order[0]); i++)
 		{
-			char ok_str[32];
-			format_bytes(ok_bytes, ok_str, sizeof(ok_str));
-			const char *green = use_color ? COLOR_GREEN : "";
-			const char *rst2 = use_color ? COLOR_RESET : "";
-			printf("  %sOK%s              %5d   %s\n", green, rst2, ok_count, ok_str);
-		}
+			BackupStatus st = order[i];
+			if (status_count[st] == 0)
+				continue;
 
-		if (warning_count > 0)
-		{
-			char warn_str[32];
-			format_bytes(warning_bytes, warn_str, sizeof(warn_str));
-			const char *yellow = use_color ? COLOR_YELLOW : "";
-			const char *rst2 = use_color ? COLOR_RESET : "";
-			printf("  %sWARNING%s         %5d   %s\n", yellow, rst2, warning_count, warn_str);
-		}
-
-		if (error_count > 0)
-		{
-			char err_str[32];
-			format_bytes(error_bytes, err_str, sizeof(err_str));
-			const char *red = use_color ? COLOR_RED : "";
-			const char *rst2 = use_color ? COLOR_RESET : "";
-			printf("  %sERROR%s           %5d   %s\n", red, rst2, error_count, err_str);
-		}
-
-		if (corrupt_count > 0)
-		{
-			char corr_str[32];
-			format_bytes(corrupt_bytes, corr_str, sizeof(corr_str));
-			const char *red = use_color ? COLOR_RED : "";
-			const char *rst2 = use_color ? COLOR_RESET : "";
-			printf("  %sCORRUPT%s         %5d   %s\n", red, rst2, corrupt_count, corr_str);
-		}
-
-		if (orphan_count > 0)
-		{
-			char orph_str[32];
-			format_bytes(orphan_bytes, orph_str, sizeof(orph_str));
-			const char *yellow = use_color ? COLOR_YELLOW : "";
-			const char *rst2 = use_color ? COLOR_RESET : "";
-			printf("  %sORPHAN%s          %5d   %s\n", yellow, rst2, orphan_count, orph_str);
-		}
-
-		if (running_count > 0)
-		{
-			char run_str[32];
-			format_bytes(running_bytes, run_str, sizeof(run_str));
-			const char *blue = use_color ? COLOR_BLUE : "";
-			const char *rst2 = use_color ? COLOR_RESET : "";
-			printf("  %sRUNNING%s         %5d   %s\n", blue, rst2, running_count, run_str);
+			char size_str[32];
+			format_bytes(status_bytes[st], size_str, sizeof(size_str));
+			const char *scol = use_color ? backup_status_color(st) : "";
+			const char *srst = use_color ? COLOR_RESET : "";
+			const char *name = backup_status_to_string(st);
+			printf("  %s%s%s%*s%5d   %s\n", scol, name, srst,
+				   (int)(16 - strlen(name)), "", status_count[st], size_str);
 		}
 
 		printf("  ─────────────────────────────────\n");
 		char total_str[32];
 		format_bytes(total_bytes, total_str, sizeof(total_str));
-		printf("  TOTAL            %5d   %s\n", total_count, total_str);
+		printf("  %-16s%5d   %s\n", "TOTAL", total_count, total_str);
 
 		/* WAL Archive Volume by tool and instance (from backups or archives) */
 		printf("\n  WAL Archive Volume:\n");

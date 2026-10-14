@@ -152,11 +152,19 @@ validate_backup_metadata(BackupInfo *info)
 		add_error(result, msg);
 	}
 
+	/* Status and type must be recognized; UNKNOWN means the tool's
+	 * metadata could not be interpreted */
+	if (info->status == BACKUP_STATUS_UNKNOWN)
+		add_error(result, "Unknown backup status in tool metadata");
+
+	if (info->type == BACKUP_TYPE_UNKNOWN)
+		add_error(result, "Unknown backup type in tool metadata");
+
 	/* Timestamps */
 	if (info->start_time == 0)
 		add_warning(result, "Missing start_time");
 
-	if (info->end_time == 0 && info->status == BACKUP_STATUS_OK)
+	if (info->end_time == 0 && backup_status_is_usable(info->status))
 		add_warning(result, "Missing end_time for completed backup");
 
 	if (info->start_time > 0 && info->end_time > 0 &&
@@ -467,9 +475,8 @@ validate_backup_chain(BackupInfo *backup, BackupInfo *all_backups,
 			}
 
 			/* Check parent status before validating */
-			if (parent->status == BACKUP_STATUS_ERROR   ||
-				parent->status == BACKUP_STATUS_CORRUPT ||
-				parent->status == BACKUP_STATUS_ORPHAN)
+			if (!backup_status_is_usable(parent->status) &&
+				parent->status != BACKUP_STATUS_RUNNING)
 			{
 				snprintf(msg, sizeof(msg),
 						 "Parent backup %s has status %s — chain is not "

@@ -53,7 +53,8 @@ print_list_usage(void)
 	printf("OPTIONS:\n");
 	printf("  -B, --backup-dir=PATH    Path to backup directory (required)\n");
 	printf("  -t, --type=TYPE          Filter by tool: auto, pg_basebackup, pg_probackup, pgbackrest\n");
-	printf("  -s, --status=STATUS      Filter by status: all, ok, warning, error, corrupt, orphan, running\n");
+	printf("  -s, --status=STATUS      Filter by status: all, ok, done, warning, error, corrupt,\n"
+	       "                           orphan, running, merging, merged, deleting, deleted, unknown\n");
 	printf("      --sort-by=FIELD      Sort by: start_time (default), end_time, name, size\n");
 	printf("  -r, --reverse            Reverse sort order\n");
 	printf("  -n, --limit=N            Limit number of results (default: unlimited)\n");
@@ -267,7 +268,7 @@ print_stat_usage(void)
 	printf("  Total Size   - Combined size of all backups in group\n");
 	printf("  Avg Size     - Average size per backup\n");
 	printf("  Avg Duration - Average backup duration (h/m/s), N/A if no valid duration\n");
-	printf("  OK%%          - Percentage of backups with OK status\n\n");
+	printf("  OK%%          - Percentage of usable backups (OK, DONE, WARNING)\n\n");
 
 	printf("STORAGE SECTION:\n");
 	printf("  Count by status      - Number of backups in each status (OK, WARNING, ERROR, etc.)\n");

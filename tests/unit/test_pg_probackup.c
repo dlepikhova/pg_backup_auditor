@@ -168,6 +168,60 @@ START_TEST(test_parse_status_running)
 }
 END_TEST
 
+/* All pg_probackup statuses map to their own enum value */
+START_TEST(test_parse_status_all)
+{
+	static const struct { const char *str; BackupStatus st; } cases[] = {
+		{"OK", BACKUP_STATUS_OK},             {"DONE", BACKUP_STATUS_DONE},
+		{"RUNNING", BACKUP_STATUS_RUNNING},   {"MERGING", BACKUP_STATUS_MERGING},
+		{"MERGED", BACKUP_STATUS_MERGED},     {"DELETING", BACKUP_STATUS_DELETING},
+		{"DELETED", BACKUP_STATUS_DELETED},   {"ERROR", BACKUP_STATUS_ERROR},
+		{"ORPHAN", BACKUP_STATUS_ORPHAN},     {"CORRUPT", BACKUP_STATUS_CORRUPT},
+		{"BOGUS", BACKUP_STATUS_UNKNOWN},
+	};
+	char tmp[64];
+	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_status_%d", (int)getpid());
+
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+	{
+		BackupInfo *b = scan_with_control(tmp, "FULL", cases[i].str);
+		rm_rf(tmp);
+		ck_assert_ptr_nonnull(b);
+		ck_assert_msg(b->status == cases[i].st, "status %s parsed as %s",
+					  cases[i].str, backup_status_to_string(b->status));
+		free_backup_list(b);
+	}
+}
+END_TEST
+
+/* No status / backup-mode lines -> UNKNOWN, not OK / FULL */
+START_TEST(test_parse_missing_status_and_mode)
+{
+	char tmp[64];
+	char db_dir[PATH_MAX];
+	char ctl_path[PATH_MAX];
+	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_nostatus_%d", (int)getpid());
+	snprintf(db_dir,  sizeof(db_dir),  "%s/database", tmp);
+	snprintf(ctl_path, sizeof(ctl_path), "%s/backup.control", tmp);
+	mkdir(tmp, 0755);
+	mkdir(db_dir, 0755);
+
+	FILE *f = fopen(ctl_path, "w");
+	ck_assert_ptr_nonnull(f);
+	fprintf(f, "backup-id = TSTABC\n");
+	fprintf(f, "start-lsn = 0/1000028\n");
+	fclose(f);
+
+	BackupInfo *b = pg_probackup_adapter.scan(tmp);
+	rm_rf(tmp);
+
+	ck_assert_ptr_nonnull(b);
+	ck_assert_int_eq(b->status, BACKUP_STATUS_UNKNOWN);
+	ck_assert_int_eq(b->type, BACKUP_TYPE_UNKNOWN);
+	free_backup_list(b);
+}
+END_TEST
+
 /* PAGE backup-mode is parsed correctly */
 START_TEST(test_parse_mode_page)
 {
@@ -367,6 +421,8 @@ pg_probackup_suite(void)
 	tcase_add_test(tc_parse, test_parse_mode_page);
 	tcase_add_test(tc_parse, test_parse_mode_ptrack);
 	tcase_add_test(tc_parse, test_parse_status_orphan);
+	tcase_add_test(tc_parse, test_parse_status_all);
+	tcase_add_test(tc_parse, test_parse_missing_status_and_mode);
 	tcase_add_test(tc_parse, test_parse_from_replica_standby);
 	tcase_add_test(tc_parse, test_parse_from_replica_primary);
 	tcase_add_test(tc_parse, test_parse_control_prefix_collision);

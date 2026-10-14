@@ -68,5 +68,7 @@ const char* backup_tool_to_string(BackupTool tool);
 const char* backup_status_to_string(BackupStatus status);
 bool backup_tool_from_string(const char *str, BackupTool *out);
 bool backup_status_from_string(const char *str, BackupStatus *out);
+bool backup_status_is_usable(BackupStatus status);
+const char* backup_status_color(BackupStatus status);
 
 #endif /* ADAPTER_H */

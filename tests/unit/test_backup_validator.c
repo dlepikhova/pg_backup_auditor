@@ -722,6 +722,7 @@ fill_valid_backup(BackupInfo *b)
 	b->timeline   = 1;
 	b->pg_version = 170000;
 	b->status     = BACKUP_STATUS_OK;
+	b->type       = BACKUP_TYPE_FULL;
 }
 
 /* NULL input → NULL returned (no crash) */

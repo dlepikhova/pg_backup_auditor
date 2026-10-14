@@ -4,6 +4,23 @@ All notable changes to pg_backup_auditor are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- pg_probackup statuses DONE, MERGING, MERGED, DELETING and DELETED are now recognized. Previously they were reported as OK, so a backup with an interrupted merge was counted as restorable.
+- A backup whose status or type cannot be read from tool metadata is now reported as UNKNOWN and flagged by `check`, instead of being treated as an OK FULL backup.
+- `check --backup-id` with an ID that does not exist now fails with `Backup not found` and exit code 1 instead of reporting `Result: OK`.
+- `check` now exits with code 2 when no backup was eligible for validation (previously 0).
+- pgBackRest backups with page checksum errors are now detected. The flag is read from `"backup-error":true` in `backup.info`, where pgBackRest records it; the previous check looked for a `backup-error=y` line in `backup.manifest`, which pgBackRest never writes. Such backups are shown as WARNING and reported as an error by `check`.
+
+### Changed
+
+- `check` skips MERGING and MERGED backups with a hint to rerun `pg_probackup merge`, and DELETING / DELETED backups, in addition to ERROR / CORRUPT.
+- `audit` and `stat` treat OK, DONE and WARNING as usable backups. In `audit`, a FULL backup in any other status except RUNNING marks its chain BROKEN.
+- `list --status` accepts the new statuses; `stat` STORAGE lists every status present in the catalog.
+- README exit code table now matches the implementation (code 3 is not used).
+
 ## [0.3.1] - 2026-06-22
 
 ### Fixed

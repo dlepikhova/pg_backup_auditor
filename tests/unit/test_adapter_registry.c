@@ -133,6 +133,46 @@ START_TEST(test_backup_status_to_string_unknown)
 }
 END_TEST
 
+/* Every status survives to_string -> from_string */
+START_TEST(test_backup_status_roundtrip_all)
+{
+	for (int i = 0; i < BACKUP_STATUS_COUNT; i++)
+	{
+		BackupStatus st = (BackupStatus)-1;
+		const char *name = backup_status_to_string((BackupStatus)i);
+		ck_assert_msg(backup_status_from_string(name, &st),
+					  "status %d (%s) not parsed back", i, name);
+		ck_assert_int_eq(st, i);
+	}
+}
+END_TEST
+
+/* Zero value of both enums is UNKNOWN, so unparsed metadata is never OK/FULL */
+START_TEST(test_enum_zero_is_unknown)
+{
+	BackupInfo b;
+	memset(&b, 0, sizeof(b));
+	ck_assert_int_eq(b.status, BACKUP_STATUS_UNKNOWN);
+	ck_assert_int_eq(b.type, BACKUP_TYPE_UNKNOWN);
+	ck_assert_str_eq(backup_type_to_string(b.type), "UNKNOWN");
+}
+END_TEST
+
+/* Usable for restore/analytics: exactly OK, DONE, WARNING */
+START_TEST(test_backup_status_is_usable)
+{
+	for (int i = 0; i < BACKUP_STATUS_COUNT; i++)
+	{
+		bool expected = (i == BACKUP_STATUS_OK ||
+						 i == BACKUP_STATUS_DONE ||
+						 i == BACKUP_STATUS_WARNING);
+		ck_assert_msg(backup_status_is_usable((BackupStatus)i) == expected,
+					  "unexpected usability for %s",
+					  backup_status_to_string((BackupStatus)i));
+	}
+}
+END_TEST
+
 /* ----- backup_tool_from_string ----- */
 
 START_TEST(test_backup_tool_from_string_known)
@@ -202,7 +242,7 @@ END_TEST
 START_TEST(test_backup_status_from_string_invalid)
 {
 	BackupStatus st = BACKUP_STATUS_OK;
-	ck_assert(!backup_status_from_string("done",  &st));
+	ck_assert(!backup_status_from_string("done1", &st));
 	ck_assert(!backup_status_from_string("",      &st));
 	ck_assert(!backup_status_from_string(NULL,    &st));
 	ck_assert(!backup_status_from_string("ok",    NULL));
@@ -294,6 +334,9 @@ adapter_registry_suite(void)
 		tcase_add_test(tc_from, test_backup_status_from_string_known);
 		tcase_add_test(tc_from, test_backup_status_from_string_case_insensitive);
 		tcase_add_test(tc_from, test_backup_status_from_string_invalid);
+		tcase_add_test(tc_from, test_backup_status_roundtrip_all);
+		tcase_add_test(tc_from, test_enum_zero_is_unknown);
+		tcase_add_test(tc_from, test_backup_status_is_usable);
 		tcase_add_test(tc_from, test_validation_level_from_string_known);
 		tcase_add_test(tc_from, test_validation_level_from_string_case_insensitive);
 		tcase_add_test(tc_from, test_validation_level_from_string_invalid);

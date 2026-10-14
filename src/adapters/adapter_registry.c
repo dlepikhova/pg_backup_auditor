@@ -132,9 +132,61 @@ backup_status_to_string(BackupStatus status)
 			return "ORPHAN";
 		case BACKUP_STATUS_WARNING:
 			return "WARNING";
+		case BACKUP_STATUS_DONE:
+			return "DONE";
+		case BACKUP_STATUS_MERGING:
+			return "MERGING";
+		case BACKUP_STATUS_MERGED:
+			return "MERGED";
+		case BACKUP_STATUS_DELETING:
+			return "DELETING";
+		case BACKUP_STATUS_DELETED:
+			return "DELETED";
+		case BACKUP_STATUS_UNKNOWN:
 		default:
 			return "UNKNOWN";
 	}
+}
+
+/*
+ * Whether a backup with this status can be used for restore and analytics.
+ * Matches pg_probackup, which restores and validates only OK and DONE.
+ */
+bool
+backup_status_is_usable(BackupStatus status)
+{
+	return status == BACKUP_STATUS_OK ||
+		   status == BACKUP_STATUS_WARNING ||
+		   status == BACKUP_STATUS_DONE;
+}
+
+/*
+ * Terminal color for a status; callers decide whether colors are enabled.
+ */
+const char*
+backup_status_color(BackupStatus status)
+{
+	switch (status)
+	{
+		case BACKUP_STATUS_OK:
+		case BACKUP_STATUS_DONE:
+			return COLOR_GREEN;
+		case BACKUP_STATUS_WARNING:
+		case BACKUP_STATUS_ORPHAN:
+		case BACKUP_STATUS_MERGING:
+		case BACKUP_STATUS_MERGED:
+			return COLOR_YELLOW;
+		case BACKUP_STATUS_RUNNING:
+		case BACKUP_STATUS_DELETING:
+			return COLOR_CYAN;
+		case BACKUP_STATUS_ERROR:
+		case BACKUP_STATUS_CORRUPT:
+		case BACKUP_STATUS_UNKNOWN:
+			return COLOR_RED;
+		case BACKUP_STATUS_DELETED:
+			return "";
+	}
+	return "";
 }
 
 /*
@@ -167,5 +219,11 @@ backup_status_from_string(const char *str, BackupStatus *out)
 	if (strcasecmp(str, "error")   == 0) { *out = BACKUP_STATUS_ERROR;   return true; }
 	if (strcasecmp(str, "orphan")  == 0) { *out = BACKUP_STATUS_ORPHAN;  return true; }
 	if (strcasecmp(str, "warning") == 0) { *out = BACKUP_STATUS_WARNING; return true; }
+	if (strcasecmp(str, "done")     == 0) { *out = BACKUP_STATUS_DONE;     return true; }
+	if (strcasecmp(str, "merging")  == 0) { *out = BACKUP_STATUS_MERGING;  return true; }
+	if (strcasecmp(str, "merged")   == 0) { *out = BACKUP_STATUS_MERGED;   return true; }
+	if (strcasecmp(str, "deleting") == 0) { *out = BACKUP_STATUS_DELETING; return true; }
+	if (strcasecmp(str, "deleted")  == 0) { *out = BACKUP_STATUS_DELETED;  return true; }
+	if (strcasecmp(str, "unknown")  == 0) { *out = BACKUP_STATUS_UNKNOWN;  return true; }
 	return false;
 }

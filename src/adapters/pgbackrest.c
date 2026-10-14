@@ -302,6 +302,15 @@ parse_pgbackrest_backup_info(const char *backup_info_path, const char *stanza_na
 		if (get_json_value(json_value, "backup-lsn-stop", val, sizeof(val)))
 			parse_lsn(val, &info->stop_lsn);
 
+		/* pgBackRest sets backup-error when any file had page checksum
+		 * errors; the backup completed but carries the damaged pages */
+		if (get_json_value(json_value, "backup-error", val, sizeof(val)) &&
+			strcmp(val, "true") == 0)
+		{
+			info->checksum_page_error = true;
+			info->status = BACKUP_STATUS_WARNING;
+		}
+
 		/* Parent backup (DIFF and INCR backups) */
 		if (get_json_value(json_value, "backup-prior", val, sizeof(val)))
 			str_copy(info->parent_backup_id, val,
