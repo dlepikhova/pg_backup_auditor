@@ -28,6 +28,7 @@
 #include <unistd.h>
 #include "pg_backup_auditor.h"
 #include "pgbackrest.h"
+#include "test_helpers.h"
 
 /* Test fixtures - temporary directories for testing */
 static char test_dir[PATH_MAX];
@@ -42,24 +43,24 @@ setup_pgbackrest_repo(void)
 	FILE *fp;
 
 	/* Create base test directory */
-	snprintf(test_dir, sizeof(test_dir), "/tmp/pgbackrest_test_%d", getpid());
+	TEST_SNPRINTF(test_dir, "/tmp/pgbackrest_test_%d", getpid());
 	mkdir(test_dir, 0755);
 
 	/* Create repository structure: repo/backup/stanza_name/ */
-	snprintf(repo_dir, sizeof(repo_dir), "%s/repo", test_dir);
+	TEST_SNPRINTF(repo_dir, "%s/repo", test_dir);
 	mkdir(repo_dir, 0755);
 
-	snprintf(path, sizeof(path), "%s/backup", repo_dir);
+	TEST_SNPRINTF(path, "%s/backup", repo_dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/archive", repo_dir);
+	TEST_SNPRINTF(path, "%s/archive", repo_dir);
 	mkdir(path, 0755);
 
-	snprintf(stanza_dir, sizeof(stanza_dir), "%s/backup/test_stanza", repo_dir);
+	TEST_SNPRINTF(stanza_dir, "%s/backup/test_stanza", repo_dir);
 	mkdir(stanza_dir, 0755);
 
 	/* Create backup.info file with JSON backup entries */
-	snprintf(path, sizeof(path), "%s/backup.info", stanza_dir);
+	TEST_SNPRINTF(path, "%s/backup.info", stanza_dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "[backrest]\n");
 	fprintf(fp, "backrest-format=5\n");
@@ -84,14 +85,14 @@ setup_pgbackrest_repo(void)
 	fclose(fp);
 
 	/* Create backup directories */
-	snprintf(path, sizeof(path), "%s/20240108-100530F", stanza_dir);
+	TEST_SNPRINTF(path, "%s/20240108-100530F", stanza_dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/20240109-143015I", stanza_dir);
+	TEST_SNPRINTF(path, "%s/20240109-143015I", stanza_dir);
 	mkdir(path, 0755);
 
 	/* Create backup.manifest for full backup */
-	snprintf(path, sizeof(path), "%s/20240108-100530F/backup.manifest", stanza_dir);
+	TEST_SNPRINTF(path, "%s/20240108-100530F/backup.manifest", stanza_dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "[backup]\n");
 	fprintf(fp, "backup-label=20240108-100530F\n");
@@ -107,7 +108,7 @@ setup_pgbackrest_repo(void)
 	fclose(fp);
 
 	/* Create backup.manifest for incremental backup */
-	snprintf(path, sizeof(path), "%s/20240109-143015I/backup.manifest", stanza_dir);
+	TEST_SNPRINTF(path, "%s/20240109-143015I/backup.manifest", stanza_dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "[backup]\n");
 	fprintf(fp, "backup-label=20240109-143015I\n");
@@ -128,8 +129,8 @@ static void
 teardown_pgbackrest_repo(void)
 {
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", test_dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", test_dir);
+	TEST_SYSTEM(cmd);
 }
 
 /* Test: pgBackRest repository detection */
@@ -151,8 +152,8 @@ START_TEST(test_detect_missing_backup_dir)
 
 	/* Remove backup directory */
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "rm -rf %s/backup", repo_dir);
-	system(path);
+	TEST_SNPRINTF(path, "rm -rf %s/backup", repo_dir);
+	TEST_SYSTEM(path);
 
 	bool result = pgbackrest_adapter.detect(repo_dir);
 	ck_assert_int_eq(result, false);
@@ -168,8 +169,8 @@ START_TEST(test_detect_missing_archive_dir)
 
 	/* Remove archive directory */
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "rm -rf %s/archive", repo_dir);
-	system(path);
+	TEST_SNPRINTF(path, "rm -rf %s/archive", repo_dir);
+	TEST_SYSTEM(path);
 
 	bool result = pgbackrest_adapter.detect(repo_dir);
 	ck_assert_int_eq(result, false);
@@ -395,7 +396,7 @@ make_pgbackrest_backup_info(const char *backup_path)
 	if (bi == NULL)
 		return NULL;
 	bi->tool = BACKUP_TOOL_PGBACKREST;
-	strncpy(bi->backup_path, backup_path, PATH_MAX - 1);
+	str_copy(bi->backup_path, backup_path, sizeof(bi->backup_path));
 	return bi;
 }
 
@@ -421,22 +422,22 @@ make_pgbackrest_plain_structure(const char *dir)
 {
 	char path[PATH_MAX];
 
-	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	TEST_SNPRINTF(path, "%s/backup.manifest", dir);
 	touch_file(path);
 
-	snprintf(path, sizeof(path), "%s/backup.manifest.copy", dir);
+	TEST_SNPRINTF(path, "%s/backup.manifest.copy", dir);
 	touch_file(path);
 
-	snprintf(path, sizeof(path), "%s/pg_data", dir);
+	TEST_SNPRINTF(path, "%s/pg_data", dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/pg_data/global", dir);
+	TEST_SNPRINTF(path, "%s/pg_data/global", dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/pg_data/global/pg_control", dir);
+	TEST_SNPRINTF(path, "%s/pg_data/global/pg_control", dir);
 	touch_file(path);
 
-	snprintf(path, sizeof(path), "%s/pg_data/PG_VERSION", dir);
+	TEST_SNPRINTF(path, "%s/pg_data/PG_VERSION", dir);
 	touch_file(path);
 }
 
@@ -444,7 +445,7 @@ make_pgbackrest_plain_structure(const char *dir)
 START_TEST(test_validate_struct_ok)
 {
 	char dir[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vs_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pgbackrest_vs_%d", getpid());
 	mkdir(dir, 0755);
 
 	make_pgbackrest_plain_structure(dir);
@@ -461,8 +462,8 @@ START_TEST(test_validate_struct_ok)
 	free(bi);
 
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
@@ -470,13 +471,13 @@ END_TEST
 START_TEST(test_validate_struct_ok_without_copy)
 {
 	char dir[PATH_MAX], path[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vsc_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pgbackrest_vsc_%d", getpid());
 	mkdir(dir, 0755);
 
 	make_pgbackrest_plain_structure(dir);
 
 	/* Remove the copy */
-	snprintf(path, sizeof(path), "%s/backup.manifest.copy", dir);
+	TEST_SNPRINTF(path, "%s/backup.manifest.copy", dir);
 	unlink(path);
 
 	BackupInfo *bi = make_pgbackrest_backup_info(dir);
@@ -491,8 +492,8 @@ START_TEST(test_validate_struct_ok_without_copy)
 	free(bi);
 
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
@@ -500,11 +501,11 @@ END_TEST
 START_TEST(test_validate_struct_missing_pg_control)
 {
 	char dir[PATH_MAX], path[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vspc_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pgbackrest_vspc_%d", getpid());
 	mkdir(dir, 0755);
 
 	make_pgbackrest_plain_structure(dir);
-	snprintf(path, sizeof(path), "%s/pg_data/global/pg_control", dir);
+	TEST_SNPRINTF(path, "%s/pg_data/global/pg_control", dir);
 	unlink(path);
 
 	BackupInfo *bi = make_pgbackrest_backup_info(dir);
@@ -522,8 +523,8 @@ START_TEST(test_validate_struct_missing_pg_control)
 	free(bi);
 
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
@@ -531,11 +532,11 @@ END_TEST
 START_TEST(test_validate_struct_missing_pg_version)
 {
 	char dir[PATH_MAX], path[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vspv_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pgbackrest_vspv_%d", getpid());
 	mkdir(dir, 0755);
 
 	make_pgbackrest_plain_structure(dir);
-	snprintf(path, sizeof(path), "%s/pg_data/PG_VERSION", dir);
+	TEST_SNPRINTF(path, "%s/pg_data/PG_VERSION", dir);
 	unlink(path);
 
 	BackupInfo *bi = make_pgbackrest_backup_info(dir);
@@ -553,19 +554,19 @@ START_TEST(test_validate_struct_missing_pg_version)
 	free(bi);
 
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
 START_TEST(test_validate_struct_missing_manifest)
 {
 	char dir[PATH_MAX], path[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vsm_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pgbackrest_vsm_%d", getpid());
 	mkdir(dir, 0755);
 
 	/* pg_data/ present but no backup.manifest */
-	snprintf(path, sizeof(path), "%s/pg_data", dir);
+	TEST_SNPRINTF(path, "%s/pg_data", dir);
 	mkdir(path, 0755);
 
 	BackupInfo *bi = make_pgbackrest_backup_info(dir);
@@ -579,19 +580,19 @@ START_TEST(test_validate_struct_missing_manifest)
 	free(bi);
 
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
 START_TEST(test_validate_struct_missing_pg_data)
 {
 	char dir[PATH_MAX], path[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vsd_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pgbackrest_vsd_%d", getpid());
 	mkdir(dir, 0755);
 
 	/* backup.manifest present but no pg_data */
-	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	TEST_SNPRINTF(path, "%s/backup.manifest", dir);
 	touch_file(path);
 
 	BackupInfo *bi = make_pgbackrest_backup_info(dir);
@@ -605,8 +606,8 @@ START_TEST(test_validate_struct_missing_pg_data)
 	free(bi);
 
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
@@ -614,7 +615,7 @@ END_TEST
 START_TEST(test_validate_struct_backup_error)
 {
 	char dir[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_vsbe_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pgbackrest_vsbe_%d", getpid());
 	mkdir(dir, 0755);
 
 	make_pgbackrest_plain_structure(dir);
@@ -635,8 +636,8 @@ START_TEST(test_validate_struct_backup_error)
 	free(bi);
 
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
@@ -644,10 +645,10 @@ END_TEST
 START_TEST(test_parse_backup_info_backup_error)
 {
 	char dir[PATH_MAX], path[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pgbackrest_bierr_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pgbackrest_bierr_%d", getpid());
 	mkdir(dir, 0755);
 
-	snprintf(path, sizeof(path), "%s/backup.info", dir);
+	TEST_SNPRINTF(path, "%s/backup.info", dir);
 	FILE *fp = fopen(path, "w");
 	ck_assert_ptr_nonnull(fp);
 	fprintf(fp, "[backup:current]\n");
@@ -678,8 +679,8 @@ START_TEST(test_parse_backup_info_backup_error)
 
 	free_backup_list(list);
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
@@ -702,7 +703,7 @@ sha1_hex_of_string(const char *content, size_t len, char *out_hex)
 
 	strcpy(out_hex, "0000000000000000000000000000000000000000");
 
-	snprintf(tmp_path, sizeof(tmp_path), "/tmp/pbr_sha1_%d", getpid());
+	TEST_SNPRINTF(tmp_path, "/tmp/pbr_sha1_%d", getpid());
 	fp = fopen(tmp_path, "wb");
 	if (fp == NULL)
 		return;
@@ -716,13 +717,13 @@ sha1_hex_of_string(const char *content, size_t len, char *out_hex)
 		char  line[256];
 		size_t hlen;
 
-		snprintf(cmd, sizeof(cmd), fmts[i], tmp_path);
+		TEST_SNPRINTF(cmd, fmts[i], tmp_path);
 		pp = popen(cmd, "r");
 		if (pp == NULL)
 			continue;
 
-		line[0] = '\0';
-		fgets(line, sizeof(line), pp);
+		if (fgets(line, sizeof(line), pp) == NULL)
+			line[0] = '\0';
 		pclose(pp);
 
 		hlen = 0;
@@ -754,7 +755,7 @@ END_TEST
 START_TEST(test_pbr_checksums_no_manifest)
 {
 	char dir[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pbr_ck_nomnf_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pbr_ck_nomnf_%d", getpid());
 	mkdir(dir, 0755);
 
 	BackupInfo *bi = make_pgbackrest_backup_info(dir);
@@ -763,8 +764,8 @@ START_TEST(test_pbr_checksums_no_manifest)
 
 	free(bi);
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
@@ -772,11 +773,11 @@ END_TEST
 START_TEST(test_pbr_checksums_compressed)
 {
 	char dir[PATH_MAX], path[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pbr_ck_cmp_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pbr_ck_cmp_%d", getpid());
 	mkdir(dir, 0755);
 
 	/* manifest exists but pg_data/ is absent (compressed backup) */
-	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	TEST_SNPRINTF(path, "%s/backup.manifest", dir);
 	touch_file(path);
 
 	BackupInfo *bi = make_pgbackrest_backup_info(dir);
@@ -785,8 +786,8 @@ START_TEST(test_pbr_checksums_compressed)
 
 	free(bi);
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
@@ -794,15 +795,15 @@ END_TEST
 START_TEST(test_pbr_checksums_all_ok)
 {
 	char dir[PATH_MAX], path[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pbr_ck_ok_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pbr_ck_ok_%d", getpid());
 	mkdir(dir, 0755);
 
 	/* Create pg_data/ with one file */
-	snprintf(path, sizeof(path), "%s/pg_data", dir);
+	TEST_SNPRINTF(path, "%s/pg_data", dir);
 	mkdir(path, 0755);
 
 	const char *content = "17\n";
-	snprintf(path, sizeof(path), "%s/pg_data/PG_VERSION", dir);
+	TEST_SNPRINTF(path, "%s/pg_data/PG_VERSION", dir);
 	FILE *fp = fopen(path, "w");
 	fputs(content, fp);
 	fclose(fp);
@@ -812,7 +813,7 @@ START_TEST(test_pbr_checksums_all_ok)
 	sha1_hex_of_string(content, strlen(content), sha1);
 
 	/* Write manifest with correct checksum */
-	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	TEST_SNPRINTF(path, "%s/backup.manifest", dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "[backup]\nbackup-label=test\n\n");
 	fprintf(fp, "[target:file]\n");
@@ -829,8 +830,8 @@ START_TEST(test_pbr_checksums_all_ok)
 	free_validation_result(r);
 	free(bi);
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
@@ -838,19 +839,19 @@ END_TEST
 START_TEST(test_pbr_checksums_mismatch)
 {
 	char dir[PATH_MAX], path[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pbr_ck_mis_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pbr_ck_mis_%d", getpid());
 	mkdir(dir, 0755);
 
-	snprintf(path, sizeof(path), "%s/pg_data", dir);
+	TEST_SNPRINTF(path, "%s/pg_data", dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/pg_data/PG_VERSION", dir);
+	TEST_SNPRINTF(path, "%s/pg_data/PG_VERSION", dir);
 	FILE *fp = fopen(path, "w");
 	fputs("17\n", fp);
 	fclose(fp);
 
 	/* Write manifest with WRONG checksum */
-	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	TEST_SNPRINTF(path, "%s/backup.manifest", dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "[backup]\nbackup-label=test\n\n");
 	fprintf(fp, "[target:file]\n");
@@ -871,8 +872,8 @@ START_TEST(test_pbr_checksums_mismatch)
 	free_validation_result(r);
 	free(bi);
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
@@ -880,14 +881,14 @@ END_TEST
 START_TEST(test_pbr_checksums_missing_file)
 {
 	char dir[PATH_MAX], path[PATH_MAX];
-	snprintf(dir, sizeof(dir), "/tmp/pbr_ck_mf_%d", getpid());
+	TEST_SNPRINTF(dir, "/tmp/pbr_ck_mf_%d", getpid());
 	mkdir(dir, 0755);
 
-	snprintf(path, sizeof(path), "%s/pg_data", dir);
+	TEST_SNPRINTF(path, "%s/pg_data", dir);
 	mkdir(path, 0755);
 
 	/* manifest lists a file that doesn't exist on disk */
-	snprintf(path, sizeof(path), "%s/backup.manifest", dir);
+	TEST_SNPRINTF(path, "%s/backup.manifest", dir);
 	FILE *fp = fopen(path, "w");
 	fprintf(fp, "[backup]\nbackup-label=test\n\n");
 	fprintf(fp, "[target:file]\n");
@@ -907,8 +908,8 @@ START_TEST(test_pbr_checksums_missing_file)
 	free_validation_result(r);
 	free(bi);
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 END_TEST
 
@@ -925,12 +926,11 @@ make_pbr_backup(const char *id, BackupType type,
 	bi->tool   = BACKUP_TOOL_PGBACKREST;
 	bi->status = BACKUP_STATUS_OK;
 	bi->type   = type;
-	strncpy(bi->backup_id, id, sizeof(bi->backup_id) - 1);
+	str_copy(bi->backup_id, id, sizeof(bi->backup_id));
 	if (parent_id != NULL)
-		strncpy(bi->parent_backup_id, parent_id,
-				sizeof(bi->parent_backup_id) - 1);
+		str_copy(bi->parent_backup_id, parent_id, sizeof(bi->parent_backup_id));
 	if (path != NULL)
-		strncpy(bi->backup_path, path, sizeof(bi->backup_path) - 1);
+		str_copy(bi->backup_path, path, sizeof(bi->backup_path));
 	return bi;
 }
 

@@ -31,6 +31,7 @@
 #include "../../include/types.h"
 #include "../../include/common.h"
 #include "../../include/sha256.h"
+#include "test_helpers.h"
 
 /* ------------------------------------------------------------------ *
  * Helpers
@@ -48,7 +49,7 @@ make_dir(const char *path)
 	char tmp[PATH_MAX];
 	char *p;
 
-	strncpy(tmp, path, sizeof(tmp) - 1);
+	str_copy(tmp, path, sizeof(tmp));
 	tmp[sizeof(tmp) - 1] = '\0';
 
 	for (p = tmp + 1; *p; p++)
@@ -122,7 +123,7 @@ write_content_control(const char *bdir, const char *path,
 	char ctrl_path[PATH_MAX];
 	FILE *fp;
 
-	snprintf(ctrl_path, sizeof(ctrl_path), "%s/backup_content.control", bdir);
+	TEST_SNPRINTF(ctrl_path, "%s/backup_content.control", bdir);
 	fp = fopen(ctrl_path, "w");
 	if (!fp) return;
 
@@ -138,8 +139,8 @@ write_content_control(const char *bdir, const char *path,
 static void
 setup_test_dirs(void)
 {
-	snprintf(test_dir, sizeof(test_dir), "/tmp/pg_bv_test_%d", getpid());
-	snprintf(backup_dir, sizeof(backup_dir), "%s/backup", test_dir);
+	TEST_SNPRINTF(test_dir, "/tmp/pg_bv_test_%d", getpid());
+	TEST_SNPRINTF(backup_dir, "%s/backup", test_dir);
 
 	make_dir(test_dir);
 	make_dir(backup_dir);
@@ -149,8 +150,8 @@ static void
 teardown_test_dirs(void)
 {
 	char cmd[PATH_MAX + 16];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", test_dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", test_dir);
+	TEST_SYSTEM(cmd);
 }
 
 /*
@@ -161,8 +162,8 @@ make_backup_info(BackupType type)
 {
 	BackupInfo info;
 	memset(&info, 0, sizeof(info));
-	strncpy(info.backup_id, "TESTID", sizeof(info.backup_id) - 1);
-	strncpy(info.backup_path, backup_dir, sizeof(info.backup_path) - 1);
+	str_copy(info.backup_id, "TESTID", sizeof(info.backup_id));
+	str_copy(info.backup_path, backup_dir, sizeof(info.backup_path));
 	info.type   = type;
 	info.tool   = BACKUP_TOOL_PG_PROBACKUP;
 	info.status = BACKUP_STATUS_OK;
@@ -180,7 +181,7 @@ START_TEST(test_crc_known_vector)
 	char        path[PATH_MAX];
 
 	setup_test_dirs();
-	snprintf(path, sizeof(path), "%s/crc_test.bin", test_dir);
+	TEST_SNPRINTF(path, "%s/crc_test.bin", test_dir);
 	write_file(path, data, strlen(data));
 
 	uint32_t crc = 0;
@@ -230,9 +231,9 @@ START_TEST(test_full_backup_file_ok)
 
 	/* Create database/base/1/ and write the file */
 	char db_base[PATH_MAX];
-	snprintf(db_base, sizeof(db_base), "%s/database/base/1", backup_dir);
+	TEST_SNPRINTF(db_base, "%s/database/base/1", backup_dir);
 	make_dir(db_base);
-	snprintf(file_path, sizeof(file_path), "%s/1234", db_base);
+	TEST_SNPRINTF(file_path, "%s/1234", db_base);
 	write_file(file_path, data, sizeof(data));
 
 	write_content_control(backup_dir, "base/1/1234", "reg",
@@ -255,7 +256,7 @@ START_TEST(test_full_backup_missing_file)
 	setup_test_dirs();
 
 	char db_base[PATH_MAX];
-	snprintf(db_base, sizeof(db_base), "%s/database/base/1", backup_dir);
+	TEST_SNPRINTF(db_base, "%s/database/base/1", backup_dir);
 	make_dir(db_base);
 	/* Do NOT create the data file */
 
@@ -280,7 +281,7 @@ START_TEST(test_delta_backup_missing_file_ok)
 	setup_test_dirs();
 
 	char db_base[PATH_MAX];
-	snprintf(db_base, sizeof(db_base), "%s/database/base/1", backup_dir);
+	TEST_SNPRINTF(db_base, "%s/database/base/1", backup_dir);
 	make_dir(db_base);
 	/* Do NOT create the data file */
 
@@ -307,9 +308,9 @@ START_TEST(test_crc_mismatch)
 	setup_test_dirs();
 
 	char db_base[PATH_MAX];
-	snprintf(db_base, sizeof(db_base), "%s/database/base/1", backup_dir);
+	TEST_SNPRINTF(db_base, "%s/database/base/1", backup_dir);
 	make_dir(db_base);
-	snprintf(file_path, sizeof(file_path), "%s/5678", db_base);
+	TEST_SNPRINTF(file_path, "%s/5678", db_base);
 	write_file(file_path, data, sizeof(data));
 
 	/* Write WRONG crc */
@@ -338,9 +339,9 @@ START_TEST(test_size_mismatch)
 	setup_test_dirs();
 
 	char db_base[PATH_MAX];
-	snprintf(db_base, sizeof(db_base), "%s/database/base/1", backup_dir);
+	TEST_SNPRINTF(db_base, "%s/database/base/1", backup_dir);
 	make_dir(db_base);
-	snprintf(file_path, sizeof(file_path), "%s/3333", db_base);
+	TEST_SNPRINTF(file_path, "%s/3333", db_base);
 	write_file(file_path, data, sizeof(data));
 
 	/* Write WRONG size (actual is 3, stored claims 999) */
@@ -365,7 +366,7 @@ START_TEST(test_zero_size_file_skipped)
 	setup_test_dirs();
 
 	char db_base[PATH_MAX];
-	snprintf(db_base, sizeof(db_base), "%s/database/base/1", backup_dir);
+	TEST_SNPRINTF(db_base, "%s/database/base/1", backup_dir);
 	make_dir(db_base);
 	/* Do NOT create the data file */
 
@@ -392,9 +393,9 @@ START_TEST(test_pg_control_excluded)
 	setup_test_dirs();
 
 	char global_dir[PATH_MAX];
-	snprintf(global_dir, sizeof(global_dir), "%s/database/global", backup_dir);
+	TEST_SNPRINTF(global_dir, "%s/database/global", backup_dir);
 	make_dir(global_dir);
-	snprintf(file_path, sizeof(file_path), "%s/pg_control", global_dir);
+	TEST_SNPRINTF(file_path, "%s/pg_control", global_dir);
 	write_file(file_path, data, sizeof(data));
 
 	/* Write deliberately wrong CRC */
@@ -418,7 +419,7 @@ START_TEST(test_dir_entries_skipped)
 	setup_test_dirs();
 
 	char db_base[PATH_MAX];
-	snprintf(db_base, sizeof(db_base), "%s/database/base/1", backup_dir);
+	TEST_SNPRINTF(db_base, "%s/database/base/1", backup_dir);
 	make_dir(db_base);
 
 	/* Write a "dir" kind entry — should be ignored */
@@ -445,9 +446,9 @@ START_TEST(test_compressed_file_skips_crc)
 	setup_test_dirs();
 
 	char db_base[PATH_MAX];
-	snprintf(db_base, sizeof(db_base), "%s/database/base/1", backup_dir);
+	TEST_SNPRINTF(db_base, "%s/database/base/1", backup_dir);
 	make_dir(db_base);
-	snprintf(file_path, sizeof(file_path), "%s/2222", db_base);
+	TEST_SNPRINTF(file_path, "%s/2222", db_base);
 	write_file(file_path, data, sizeof(data));
 
 	/* compress_alg != "none", so CRC check is skipped */
@@ -480,7 +481,7 @@ make_chain_bi(const char *id, BackupType type, BackupStatus status,
 {
 	BackupInfo bi;
 	memset(&bi, 0, sizeof(bi));
-	strncpy(bi.backup_id, id, sizeof(bi.backup_id) - 1);
+	str_copy(bi.backup_id, id, sizeof(bi.backup_id));
 	/* Empty backup_path: pg_probackup_validate_structure() returns NULL (not
 	 * applicable for missing path), so connectivity tests are not polluted
 	 * by missing on-disk files. */
@@ -489,8 +490,7 @@ make_chain_bi(const char *id, BackupType type, BackupStatus status,
 	bi.tool   = BACKUP_TOOL_PG_PROBACKUP;
 	bi.status = status;
 	if (parent_id != NULL)
-		strncpy(bi.parent_backup_id, parent_id,
-				sizeof(bi.parent_backup_id) - 1);
+		str_copy(bi.parent_backup_id, parent_id, sizeof(bi.parent_backup_id));
 	return bi;
 }
 
@@ -878,32 +878,32 @@ make_probackup_structure(const char *bdir, bool stream)
 {
 	char path[PATH_MAX];
 
-	snprintf(path, sizeof(path), "%s/database", bdir);
+	TEST_SNPRINTF(path, "%s/database", bdir);
 	make_dir(path);
 
-	snprintf(path, sizeof(path), "%s/database/database_map", bdir);
+	TEST_SNPRINTF(path, "%s/database/database_map", bdir);
 	write_file(path, "{}", 2);
 
-	snprintf(path, sizeof(path), "%s/database/global", bdir);
+	TEST_SNPRINTF(path, "%s/database/global", bdir);
 	make_dir(path);
-	snprintf(path, sizeof(path), "%s/database/global/pg_control", bdir);
+	TEST_SNPRINTF(path, "%s/database/global/pg_control", bdir);
 	write_file(path, "", 0);
 
-	snprintf(path, sizeof(path), "%s/database/PG_VERSION", bdir);
+	TEST_SNPRINTF(path, "%s/database/PG_VERSION", bdir);
 	write_file(path, "17\n", 3);
 
 	if (stream)
 	{
-		snprintf(path, sizeof(path), "%s/database/pg_wal", bdir);
+		TEST_SNPRINTF(path, "%s/database/pg_wal", bdir);
 		make_dir(path);
 	}
 	else
 	{
-		snprintf(path, sizeof(path), "%s/database/backup_label", bdir);
+		TEST_SNPRINTF(path, "%s/database/backup_label", bdir);
 		write_file(path, "", 0);
 	}
 
-	snprintf(path, sizeof(path), "%s/backup_content.control", bdir);
+	TEST_SNPRINTF(path, "%s/backup_content.control", bdir);
 	write_file(path, "{}\n", 3);
 }
 
@@ -912,8 +912,8 @@ make_struct_backup(bool stream)
 {
 	BackupInfo bi;
 	memset(&bi, 0, sizeof(bi));
-	strncpy(bi.backup_id, "STRUCT01", sizeof(bi.backup_id) - 1);
-	strncpy(bi.backup_path, backup_dir, sizeof(bi.backup_path) - 1);
+	str_copy(bi.backup_id, "STRUCT01", sizeof(bi.backup_id));
+	str_copy(bi.backup_path, backup_dir, sizeof(bi.backup_path));
 	bi.type       = BACKUP_TYPE_FULL;
 	bi.tool       = BACKUP_TOOL_PG_PROBACKUP;
 	bi.status     = BACKUP_STATUS_OK;
@@ -935,7 +935,7 @@ START_TEST(test_struct_non_probackup)
 	BackupInfo bi;
 	memset(&bi, 0, sizeof(bi));
 	bi.tool = BACKUP_TOOL_PG_BASEBACKUP;
-	strncpy(bi.backup_path, "/tmp", sizeof(bi.backup_path) - 1);
+	str_copy(bi.backup_path, "/tmp", sizeof(bi.backup_path));
 
 	ValidationResult *res = pg_probackup_validate_structure(&bi);
 	ck_assert_ptr_null(res);
@@ -987,7 +987,7 @@ START_TEST(test_struct_missing_database_dir)
 
 	/* Create backup_content.control but NOT database/ */
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/backup_content.control", backup_dir);
+	TEST_SNPRINTF(path, "%s/backup_content.control", backup_dir);
 	write_file(path, "{}\n", 3);
 
 	BackupInfo       bi  = make_struct_backup(false);
@@ -1009,7 +1009,7 @@ START_TEST(test_struct_missing_database_map)
 	make_probackup_structure(backup_dir, false);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/database/database_map", backup_dir);
+	TEST_SNPRINTF(path, "%s/database/database_map", backup_dir);
 	remove(path);
 
 	BackupInfo       bi  = make_struct_backup(false);
@@ -1034,7 +1034,7 @@ START_TEST(test_struct_missing_pg_control)
 	make_probackup_structure(backup_dir, false);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/database/global/pg_control", backup_dir);
+	TEST_SNPRINTF(path, "%s/database/global/pg_control", backup_dir);
 	remove(path);
 
 	BackupInfo       bi  = make_struct_backup(false);
@@ -1059,7 +1059,7 @@ START_TEST(test_struct_archive_missing_backup_label)
 	make_probackup_structure(backup_dir, false);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/database/backup_label", backup_dir);
+	TEST_SNPRINTF(path, "%s/database/backup_label", backup_dir);
 	remove(path);
 
 	BackupInfo       bi  = make_struct_backup(false);
@@ -1084,7 +1084,7 @@ START_TEST(test_struct_stream_missing_pg_wal)
 	make_probackup_structure(backup_dir, true);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/database/pg_wal", backup_dir);
+	TEST_SNPRINTF(path, "%s/database/pg_wal", backup_dir);
 	rmdir(path);
 
 	BackupInfo       bi  = make_struct_backup(true);
@@ -1110,7 +1110,7 @@ START_TEST(test_struct_missing_content_control)
 	make_probackup_structure(backup_dir, false);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/backup_content.control", backup_dir);
+	TEST_SNPRINTF(path, "%s/backup_content.control", backup_dir);
 	remove(path);
 
 	BackupInfo       bi  = make_struct_backup(false);
@@ -1139,23 +1139,23 @@ make_basebackup_plain_structure(const char *bdir, bool stream)
 {
 	char path[PATH_MAX];
 
-	snprintf(path, sizeof(path), "%s/base", bdir);
+	TEST_SNPRINTF(path, "%s/base", bdir);
 	make_dir(path);
 
-	snprintf(path, sizeof(path), "%s/global", bdir);
+	TEST_SNPRINTF(path, "%s/global", bdir);
 	make_dir(path);
-	snprintf(path, sizeof(path), "%s/global/pg_control", bdir);
+	TEST_SNPRINTF(path, "%s/global/pg_control", bdir);
 	write_file(path, "", 0);
 
-	snprintf(path, sizeof(path), "%s/backup_label", bdir);
+	TEST_SNPRINTF(path, "%s/backup_label", bdir);
 	write_file(path, "START WAL LOCATION: 0/1000028\n", 30);
 
-	snprintf(path, sizeof(path), "%s/PG_VERSION", bdir);
+	TEST_SNPRINTF(path, "%s/PG_VERSION", bdir);
 	write_file(path, "17\n", 3);
 
 	if (stream)
 	{
-		snprintf(path, sizeof(path), "%s/pg_wal", bdir);
+		TEST_SNPRINTF(path, "%s/pg_wal", bdir);
 		make_dir(path);
 	}
 }
@@ -1165,12 +1165,12 @@ make_basebackup_tar_structure(const char *bdir, bool stream)
 {
 	char path[PATH_MAX];
 
-	snprintf(path, sizeof(path), "%s/base.tar", bdir);
+	TEST_SNPRINTF(path, "%s/base.tar", bdir);
 	write_file(path, "", 0);
 
 	if (stream)
 	{
-		snprintf(path, sizeof(path), "%s/pg_wal.tar", bdir);
+		TEST_SNPRINTF(path, "%s/pg_wal.tar", bdir);
 		write_file(path, "", 0);
 	}
 }
@@ -1180,8 +1180,8 @@ make_bb_backup(bool stream)
 {
 	BackupInfo bi;
 	memset(&bi, 0, sizeof(bi));
-	strncpy(bi.backup_id, "BB000001", sizeof(bi.backup_id) - 1);
-	strncpy(bi.backup_path, backup_dir, sizeof(bi.backup_path) - 1);
+	str_copy(bi.backup_id, "BB000001", sizeof(bi.backup_id));
+	str_copy(bi.backup_path, backup_dir, sizeof(bi.backup_path));
 	bi.type       = BACKUP_TYPE_FULL;
 	bi.tool       = BACKUP_TOOL_PG_BASEBACKUP;
 	bi.status     = BACKUP_STATUS_OK;
@@ -1223,7 +1223,7 @@ START_TEST(test_bb_struct_plain_missing_base)
 	make_basebackup_plain_structure(backup_dir, false);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/base", backup_dir);
+	TEST_SNPRINTF(path, "%s/base", backup_dir);
 	rmdir(path);
 
 	BackupInfo        bi  = make_bb_backup(false);
@@ -1248,7 +1248,7 @@ START_TEST(test_bb_struct_plain_missing_pg_control)
 	make_basebackup_plain_structure(backup_dir, false);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/global/pg_control", backup_dir);
+	TEST_SNPRINTF(path, "%s/global/pg_control", backup_dir);
 	remove(path);
 
 	BackupInfo        bi  = make_bb_backup(false);
@@ -1273,7 +1273,7 @@ START_TEST(test_bb_struct_plain_missing_label)
 	make_basebackup_plain_structure(backup_dir, false);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/backup_label", backup_dir);
+	TEST_SNPRINTF(path, "%s/backup_label", backup_dir);
 	remove(path);
 	/* backup_manifest was never created */
 
@@ -1300,7 +1300,7 @@ START_TEST(test_bb_struct_plain_stream_missing_pg_wal)
 	make_basebackup_plain_structure(backup_dir, true);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/pg_wal", backup_dir);
+	TEST_SNPRINTF(path, "%s/pg_wal", backup_dir);
 	rmdir(path);
 
 	BackupInfo        bi  = make_bb_backup(true);
@@ -1366,7 +1366,7 @@ START_TEST(test_bb_struct_plain_missing_pg_version)
 	make_basebackup_plain_structure(backup_dir, false);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/PG_VERSION", backup_dir);
+	TEST_SNPRINTF(path, "%s/PG_VERSION", backup_dir);
 	unlink(path);
 
 	BackupInfo        bi  = make_bb_backup(false);
@@ -1493,7 +1493,7 @@ write_test_manifest(const char *bdir, const char *rel_path,
 	if (corrupt_self_cksum)
 		self_hex[0] = (self_hex[0] == 'a') ? 'b' : 'a';
 
-	snprintf(manifest_path, sizeof(manifest_path),
+	TEST_SNPRINTF(manifest_path,
 			 "%s/backup_manifest", bdir);
 	fp = fopen(manifest_path, "w");
 	if (fp)
@@ -1535,7 +1535,7 @@ START_TEST(test_manifest_crc32c_ok)
 
 	setup_test_dirs();
 
-	snprintf(file_path, sizeof(file_path), "%s/testfile", backup_dir);
+	TEST_SNPRINTF(file_path, "%s/testfile", backup_dir);
 	write_file(file_path, data, 5);
 	compute_file_crc32c(file_path, &crc);
 
@@ -1563,7 +1563,7 @@ START_TEST(test_manifest_crc32c_mismatch)
 
 	setup_test_dirs();
 
-	snprintf(file_path, sizeof(file_path), "%s/testfile", backup_dir);
+	TEST_SNPRINTF(file_path, "%s/testfile", backup_dir);
 	write_file(file_path, data, 5);
 	compute_file_crc32c(file_path, &crc);
 
@@ -1596,7 +1596,7 @@ START_TEST(test_manifest_self_checksum_bad)
 
 	setup_test_dirs();
 
-	snprintf(file_path, sizeof(file_path), "%s/testfile", backup_dir);
+	TEST_SNPRINTF(file_path, "%s/testfile", backup_dir);
 	write_file(file_path, data, 5);
 	compute_file_crc32c(file_path, &crc);
 

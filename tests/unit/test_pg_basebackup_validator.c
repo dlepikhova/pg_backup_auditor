@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "pg_backup_auditor.h"
+#include "test_helpers.h"
 
 /* Test fixtures */
 static char test_dir[PATH_MAX];
@@ -36,31 +37,31 @@ static char invalid_backup_dir[PATH_MAX];
 static void
 setup_test_directories(void)
 {
-	snprintf(test_dir, sizeof(test_dir), "/tmp/pgbb_validator_test_%d", getpid());
+	TEST_SNPRINTF(test_dir, "/tmp/pgbb_validator_test_%d", getpid());
 	mkdir(test_dir, 0755);
 
 	/* Valid pg_basebackup directory */
-	snprintf(valid_backup_dir, sizeof(valid_backup_dir), "%s/valid", test_dir);
+	TEST_SNPRINTF(valid_backup_dir, "%s/valid", test_dir);
 	mkdir(valid_backup_dir, 0755);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/base", valid_backup_dir);
+	TEST_SNPRINTF(path, "%s/base", valid_backup_dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/global", valid_backup_dir);
+	TEST_SNPRINTF(path, "%s/global", valid_backup_dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/global/pg_control", valid_backup_dir);
+	TEST_SNPRINTF(path, "%s/global/pg_control", valid_backup_dir);
 	FILE *fp = fopen(path, "w");
 	fprintf(fp, "dummy pg_control\n");
 	fclose(fp);
 
-	snprintf(path, sizeof(path), "%s/PG_VERSION", valid_backup_dir);
+	TEST_SNPRINTF(path, "%s/PG_VERSION", valid_backup_dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "16\n");
 	fclose(fp);
 
-	snprintf(path, sizeof(path), "%s/backup_label", valid_backup_dir);
+	TEST_SNPRINTF(path, "%s/backup_label", valid_backup_dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "START WAL LOCATION: 0/2000028 (file 000000010000000000000002)\n");
 	fprintf(fp, "CHECKPOINT LOCATION: 0/2000060\n");
@@ -69,13 +70,13 @@ setup_test_directories(void)
 	fclose(fp);
 
 	/* Invalid backup directory (missing pg_control) */
-	snprintf(invalid_backup_dir, sizeof(invalid_backup_dir), "%s/invalid", test_dir);
+	TEST_SNPRINTF(invalid_backup_dir, "%s/invalid", test_dir);
 	mkdir(invalid_backup_dir, 0755);
 
-	snprintf(path, sizeof(path), "%s/base", invalid_backup_dir);
+	TEST_SNPRINTF(path, "%s/base", invalid_backup_dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/global", invalid_backup_dir);
+	TEST_SNPRINTF(path, "%s/global", invalid_backup_dir);
 	mkdir(path, 0755);
 	/* No pg_control, so it fails validation */
 }
@@ -85,8 +86,8 @@ static void
 teardown_test_directories(void)
 {
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", test_dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", test_dir);
+	TEST_SYSTEM(cmd);
 }
 
 /* Test: Valid pg_basebackup structure */
@@ -96,7 +97,7 @@ START_TEST(test_valid_structure)
 
 	BackupInfo info;
 	memset(&info, 0, sizeof(info));
-	snprintf(info.backup_path, sizeof(info.backup_path), "%s", valid_backup_dir);
+	TEST_SNPRINTF(info.backup_path, "%s", valid_backup_dir);
 	info.tool = BACKUP_TOOL_PG_BASEBACKUP;
 	info.type = BACKUP_TYPE_FULL;
 
@@ -118,7 +119,7 @@ START_TEST(test_missing_pg_control)
 
 	BackupInfo info;
 	memset(&info, 0, sizeof(info));
-	snprintf(info.backup_path, sizeof(info.backup_path), "%s", invalid_backup_dir);
+	TEST_SNPRINTF(info.backup_path, "%s", invalid_backup_dir);
 	info.tool = BACKUP_TOOL_PG_BASEBACKUP;
 	info.type = BACKUP_TYPE_FULL;
 

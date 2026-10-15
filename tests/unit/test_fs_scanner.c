@@ -30,6 +30,7 @@
 #include "../../include/types.h"
 #include "../../include/common.h"
 #include "test_integration_helpers.h"
+#include "test_helpers.h"
 
 /* ------------------------------------------------------------------ *
  * scan_backup_directory() — unit tests (no real backup needed)
@@ -51,7 +52,7 @@ END_TEST
 START_TEST(test_scan_empty_dir)
 {
 	char tmp_dir[64];
-	snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/pg_fs_empty_%d", (int)getpid());
+	TEST_SNPRINTF(tmp_dir, "/tmp/pg_fs_empty_%d", (int)getpid());
 	mkdir(tmp_dir, 0755);
 
 	BackupInfo *result = scan_backup_directory(tmp_dir, -1);
@@ -83,7 +84,7 @@ START_TEST(test_scan_real_catalog)
 	INTEGRATION_SKIP();
 
 	char backup_dir[PATH_MAX];
-	snprintf(backup_dir, sizeof(backup_dir),
+	TEST_SNPRINTF(backup_dir,
 			 "%s/backups/%s", get_test_catalog(), get_test_instance());
 
 	if (!is_directory(backup_dir))
@@ -121,7 +122,7 @@ START_TEST(test_scan_depth_zero)
 	INTEGRATION_SKIP_BACKUP();
 
 	char backup_path[PATH_MAX];
-	snprintf(backup_path, sizeof(backup_path),
+	TEST_SNPRINTF(backup_path,
 			 "%s/backups/%s/%s",
 			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
@@ -162,7 +163,7 @@ START_TEST(test_scan_wal_real)
 	INTEGRATION_SKIP();
 
 	char wal_path[PATH_MAX];
-	snprintf(wal_path, sizeof(wal_path),
+	TEST_SNPRINTF(wal_path,
 			 "%s/wal/%s", get_test_catalog(), get_test_instance());
 
 	if (!is_directory(wal_path))
