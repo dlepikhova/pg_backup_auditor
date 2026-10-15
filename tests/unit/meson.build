@@ -49,14 +49,14 @@ test_sources = files(
   'test_backup_chain.c',
 )
 
-# Test-specific compiler flags (disable Werror for libcheck compatibility)
-test_c_args = c_args + ['-Wno-error=gnu-zero-variadic-macro-arguments']
-
 # Build test runner
 test_runner = executable('test_runner',
   test_sources + test_common_sources,
   include_directories: inc_dirs,
-  c_args: test_c_args,
+  c_args: c_args,
+  # Same warnings as the Makefile test build (-Wall -Wextra): libcheck's
+  # ck_assert macros use GNU variadic extensions rejected by -Wpedantic
+  override_options: ['warning_level=2'],
   dependencies: [check_dep, deps],
 )
 
