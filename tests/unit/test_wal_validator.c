@@ -31,6 +31,7 @@
 #include "../../include/common.h"
 #include "../../include/adapter.h"
 #include "test_integration_helpers.h"
+#include "test_helpers.h"
 
 /*
  * Helper: Create a WALArchiveInfo with test segments
@@ -411,7 +412,7 @@ START_TEST(test_pg_probackup_wal_path_detection)
 
 	INTEGRATION_SKIP_BACKUP();
 
-	snprintf(backup_path, sizeof(backup_path),
+	TEST_SNPRINTF(backup_path,
 			 "%s/backups/%s/%s",
 			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
@@ -427,7 +428,7 @@ START_TEST(test_pg_probackup_wal_path_detection)
 
 	/* Expected: <catalog>/wal/<instance> */
 	char expected[PATH_MAX];
-	snprintf(expected, sizeof(expected),
+	TEST_SNPRINTF(expected,
 			 "%s/wal/%s", get_test_catalog(), get_test_instance());
 	ck_assert_str_eq(wal_path, expected);
 
@@ -449,7 +450,7 @@ START_TEST(test_pg_probackup_wal_availability_real)
 
 	INTEGRATION_SKIP_BACKUP();
 
-	snprintf(backup_path, sizeof(backup_path),
+	TEST_SNPRINTF(backup_path,
 			 "%s/backups/%s/%s",
 			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
@@ -510,7 +511,7 @@ START_TEST(test_pg_probackup_wal_missing_segment)
 
 	INTEGRATION_SKIP_BACKUP();
 
-	snprintf(backup_path, sizeof(backup_path),
+	TEST_SNPRINTF(backup_path,
 			 "%s/backups/%s/%s",
 			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
@@ -531,8 +532,8 @@ START_TEST(test_pg_probackup_wal_missing_segment)
 														 backup->instance_name);
 	ck_assert_ptr_nonnull(wal_path);
 
-	snprintf(seg_original, sizeof(seg_original), "%s/%s",        wal_path, seg_a_name);
-	snprintf(seg_renamed,  sizeof(seg_renamed),  "%s/%s.broken", wal_path, seg_a_name);
+	TEST_SNPRINTF(seg_original, "%s/%s",        wal_path, seg_a_name);
+	TEST_SNPRINTF(seg_renamed,  "%s/%s.broken", wal_path, seg_a_name);
 
 	rc = rename(seg_original, seg_renamed);
 	ck_assert_int_eq(rc, 0);
@@ -622,7 +623,7 @@ START_TEST(test_pg_probackup_wal_headers_missing_seg)
 
 	INTEGRATION_SKIP_BACKUP();
 
-	snprintf(backup_path, sizeof(backup_path),
+	TEST_SNPRINTF(backup_path,
 			 "%s/backups/%s/%s",
 			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
@@ -642,8 +643,8 @@ START_TEST(test_pg_probackup_wal_headers_missing_seg)
 														 backup->instance_name);
 	ck_assert_ptr_nonnull(wal_path);
 
-	snprintf(seg_orig,   sizeof(seg_orig),   "%s/%s",        wal_path, seg_a_name);
-	snprintf(seg_broken, sizeof(seg_broken),  "%s/%s.broken", wal_path, seg_a_name);
+	TEST_SNPRINTF(seg_orig,   "%s/%s",        wal_path, seg_a_name);
+	TEST_SNPRINTF(seg_broken,  "%s/%s.broken", wal_path, seg_a_name);
 
 	rc = rename(seg_orig, seg_broken);
 	ck_assert_int_eq(rc, 0);
@@ -687,7 +688,7 @@ START_TEST(test_pg_probackup_wal_headers_bad_tli)
 
 	INTEGRATION_SKIP_BACKUP();
 
-	snprintf(backup_path, sizeof(backup_path),
+	TEST_SNPRINTF(backup_path,
 			 "%s/backups/%s/%s",
 			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
@@ -707,7 +708,7 @@ START_TEST(test_pg_probackup_wal_headers_bad_tli)
 														 backup->instance_name);
 	ck_assert_ptr_nonnull(wal_path);
 
-	snprintf(seg_b_path, sizeof(seg_b_path), "%s/%s", wal_path, seg_b_name);
+	TEST_SNPRINTF(seg_b_path, "%s/%s", wal_path, seg_b_name);
 
 	ck_assert(read_seg_header(seg_b_path, orig));
 
@@ -758,7 +759,7 @@ START_TEST(test_pg_probackup_wal_headers_bad_pageaddr)
 
 	INTEGRATION_SKIP_BACKUP();
 
-	snprintf(backup_path, sizeof(backup_path),
+	TEST_SNPRINTF(backup_path,
 			 "%s/backups/%s/%s",
 			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
@@ -787,8 +788,8 @@ START_TEST(test_pg_probackup_wal_headers_bad_pageaddr)
 														 backup->instance_name);
 	ck_assert_ptr_nonnull(wal_path);
 
-	snprintf(seg_a_path, sizeof(seg_a_path), "%s/%s", wal_path, seg_a_name);
-	snprintf(seg_b_path, sizeof(seg_b_path), "%s/%s", wal_path, seg_b_name);
+	TEST_SNPRINTF(seg_a_path, "%s/%s", wal_path, seg_a_name);
+	TEST_SNPRINTF(seg_b_path, "%s/%s", wal_path, seg_b_name);
 
 	ck_assert(read_seg_header(seg_a_path, hdr_a));
 	ck_assert(read_seg_header(seg_b_path, orig_b));
@@ -833,7 +834,7 @@ START_TEST(test_pg_probackup_wal_headers_real)
 
 	INTEGRATION_SKIP_BACKUP();
 
-	snprintf(backup_path, sizeof(backup_path),
+	TEST_SNPRINTF(backup_path,
 			 "%s/backups/%s/%s",
 			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 
@@ -1049,18 +1050,18 @@ rec_test_setup(char *dir_out, size_t dir_sz, BackupInfo *bi, WALArchiveInfo *wi)
 	bi->timeline  = 1;
 	bi->start_lsn = 0x1000000;   /* segment 1 */
 	bi->stop_lsn  = 0x1000000;
-	strncpy(bi->backup_id, "RECTEST", sizeof(bi->backup_id) - 1);
+	str_copy(bi->backup_id, "RECTEST", sizeof(bi->backup_id));
 
 	memset(wi, 0, sizeof(*wi));
-	strncpy(wi->archive_path, dir_out, sizeof(wi->archive_path) - 1);
+	str_copy(wi->archive_path, dir_out, sizeof(wi->archive_path));
 }
 
 static void
 rec_test_teardown(const char *dir)
 {
 	char cmd[PATH_MAX + 8];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 }
 
 /* All three records have correct CRCs → no errors */
@@ -1073,7 +1074,7 @@ START_TEST(test_rec_crc_all_valid)
 	ValidationResult *r;
 
 	rec_test_setup(dir, sizeof(dir), &bi, &wi);
-	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	TEST_SNPRINTF(seg, "%s/000000010000000000000001", dir);
 	write_rec_test_seg(seg, 3, -1, -1, false, false);
 
 	r = check_wal_headers(&bi, &wi);
@@ -1095,7 +1096,7 @@ START_TEST(test_rec_crc_mismatch)
 	ValidationResult *r;
 
 	rec_test_setup(dir, sizeof(dir), &bi, &wi);
-	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	TEST_SNPRINTF(seg, "%s/000000010000000000000001", dir);
 	write_rec_test_seg(seg, 3, 1, -1, false, false);
 
 	r = check_wal_headers(&bi, &wi);
@@ -1120,7 +1121,7 @@ START_TEST(test_rec_crc_invalid_totlen)
 	ValidationResult *r;
 
 	rec_test_setup(dir, sizeof(dir), &bi, &wi);
-	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	TEST_SNPRINTF(seg, "%s/000000010000000000000001", dir);
 	write_rec_test_seg(seg, 2, -1, 1, false, false);
 
 	r = check_wal_headers(&bi, &wi);
@@ -1143,7 +1144,7 @@ START_TEST(test_rec_crc_zero_skipped)
 	ValidationResult *r;
 
 	rec_test_setup(dir, sizeof(dir), &bi, &wi);
-	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	TEST_SNPRINTF(seg, "%s/000000010000000000000001", dir);
 	write_rec_test_seg(seg, 3, -1, -1, true, false);
 
 	r = check_wal_headers(&bi, &wi);
@@ -1165,7 +1166,7 @@ START_TEST(test_rec_crc_multipage_skipped)
 	ValidationResult *r;
 
 	rec_test_setup(dir, sizeof(dir), &bi, &wi);
-	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	TEST_SNPRINTF(seg, "%s/000000010000000000000001", dir);
 	write_rec_test_seg(seg, 1, -1, -1, false, true);
 
 	r = check_wal_headers(&bi, &wi);
@@ -1250,7 +1251,7 @@ START_TEST(test_rec_crc_payload_valid)
 	ValidationResult *r;
 
 	rec_test_setup(dir, sizeof(dir), &bi, &wi);
-	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	TEST_SNPRINTF(seg, "%s/000000010000000000000001", dir);
 	write_payload_seg(seg, 6, false);
 
 	r = check_wal_headers(&bi, &wi);
@@ -1272,7 +1273,7 @@ START_TEST(test_rec_crc_payload_mismatch)
 	ValidationResult *r;
 
 	rec_test_setup(dir, sizeof(dir), &bi, &wi);
-	snprintf(seg, sizeof(seg), "%s/000000010000000000000001", dir);
+	TEST_SNPRINTF(seg, "%s/000000010000000000000001", dir);
 	write_payload_seg(seg, 6, true);
 
 	r = check_wal_headers(&bi, &wi);
@@ -1373,18 +1374,18 @@ START_TEST(test_archive_headers_empty)
 	WALArchiveInfo wi;
 	ValidationResult *r;
 
-	snprintf(dir, sizeof(dir), "/tmp/pg_warch_%d", (int)getpid());
+	TEST_SNPRINTF(dir, "/tmp/pg_warch_%d", (int)getpid());
 	mkdir(dir, 0755);
 	memset(&wi, 0, sizeof(wi));
-	strncpy(wi.archive_path, dir, sizeof(wi.archive_path) - 1);
+	str_copy(wi.archive_path, dir, sizeof(wi.archive_path));
 	wi.segment_count = 0;
 	wi.segments = NULL;
 
 	r = check_wal_archive_headers(&wi);
 
 	char cmd[80];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 
 	ck_assert_ptr_nonnull(r);
 	ck_assert_int_eq(r->error_count, 0);
@@ -1401,7 +1402,7 @@ START_TEST(test_archive_headers_all_valid)
 	ValidationResult *r;
 	WALSegmentName segs[3];
 
-	snprintf(dir, sizeof(dir), "/tmp/pg_warch_%d", (int)getpid());
+	TEST_SNPRINTF(dir, "/tmp/pg_warch_%d", (int)getpid());
 	mkdir(dir, 0755);
 
 	/* Segments 1, 2, 3 on timeline 1 */
@@ -1412,13 +1413,13 @@ START_TEST(test_archive_headers_all_valid)
 		segs[i].seg_id   = (uint32_t)(i + 1);
 
 		uint64_t pa = (uint64_t)(i + 1) * 0x1000000ULL;
-		snprintf(seg, sizeof(seg),
+		TEST_SNPRINTF(seg,
 				 "%s/0000000100000000%08X", dir, i + 1);
 		write_arch_test_seg(seg, 1, pa);
 	}
 
 	memset(&wi, 0, sizeof(wi));
-	strncpy(wi.archive_path, dir, sizeof(wi.archive_path) - 1);
+	str_copy(wi.archive_path, dir, sizeof(wi.archive_path));
 	wi.segment_count = 3;
 	wi.segments = segs;
 
@@ -1426,8 +1427,8 @@ START_TEST(test_archive_headers_all_valid)
 	wi.segments = NULL;	/* stack-allocated; don't free */
 
 	char cmd[80];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 
 	ck_assert_ptr_nonnull(r);
 	ck_assert_int_eq(r->error_count, 0);
@@ -1449,7 +1450,7 @@ START_TEST(test_archive_headers_bad_pageaddr)
 	ValidationResult *r;
 	WALSegmentName segs[1];
 
-	snprintf(dir, sizeof(dir), "/tmp/pg_warch_%d", (int)getpid());
+	TEST_SNPRINTF(dir, "/tmp/pg_warch_%d", (int)getpid());
 	mkdir(dir, 0755);
 
 	/* File named segment 4 but header says pageaddr of segment 1 */
@@ -1457,11 +1458,11 @@ START_TEST(test_archive_headers_bad_pageaddr)
 	segs[0].log_id   = 0;
 	segs[0].seg_id   = 4;
 
-	snprintf(seg, sizeof(seg), "%s/000000010000000000000004", dir);
+	TEST_SNPRINTF(seg, "%s/000000010000000000000004", dir);
 	write_arch_test_seg(seg, 1, 0x1000000ULL);	/* wrong: should be 0x4000000 */
 
 	memset(&wi, 0, sizeof(wi));
-	strncpy(wi.archive_path, dir, sizeof(wi.archive_path) - 1);
+	str_copy(wi.archive_path, dir, sizeof(wi.archive_path));
 	wi.segment_count = 1;
 	wi.segments = segs;
 
@@ -1469,8 +1470,8 @@ START_TEST(test_archive_headers_bad_pageaddr)
 	wi.segments = NULL;
 
 	char cmd[80];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 
 	ck_assert_ptr_nonnull(r);
 	ck_assert_int_eq(r->error_count, 1);
@@ -1493,14 +1494,14 @@ START_TEST(test_archive_headers_truncated)
 	FILE          *f;
 	uint8_t        hdr[40] = {0};
 
-	snprintf(dir, sizeof(dir), "/tmp/pg_warch_%d", (int)getpid());
+	TEST_SNPRINTF(dir, "/tmp/pg_warch_%d", (int)getpid());
 	mkdir(dir, 0755);
 
 	segs[0].timeline = 1;
 	segs[0].log_id   = 0;
 	segs[0].seg_id   = 1;
 
-	snprintf(seg_path, sizeof(seg_path), "%s/000000010000000000000001", dir);
+	TEST_SNPRINTF(seg_path, "%s/000000010000000000000001", dir);
 
 	/* Write a valid header with xlp_seg_size=16MB, but do NOT extend to 16MB */
 	hdr[0] = 0x71; hdr[1] = 0xD0;          /* xlp_magic */
@@ -1519,7 +1520,7 @@ START_TEST(test_archive_headers_truncated)
 	fclose(f);                              /* file is 40 bytes — truncated */
 
 	memset(&wi, 0, sizeof(wi));
-	strncpy(wi.archive_path, dir, sizeof(wi.archive_path) - 1);
+	str_copy(wi.archive_path, dir, sizeof(wi.archive_path));
 	wi.segment_count = 1;
 	wi.segments = segs;
 
@@ -1527,8 +1528,8 @@ START_TEST(test_archive_headers_truncated)
 	wi.segments = NULL;
 
 	char cmd[80];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 
 	ck_assert_ptr_nonnull(r);
 	ck_assert_int_eq(r->error_count, 1);
@@ -1559,7 +1560,7 @@ make_backup_node(const char *id, uint32_t tli,
 {
 	BackupInfo *b = calloc(1, sizeof(BackupInfo));
 
-	strncpy(b->backup_id, id, sizeof(b->backup_id) - 1);
+	str_copy(b->backup_id, id, sizeof(b->backup_id));
 	b->timeline  = tli;
 	b->start_lsn = start_lsn;
 	b->stop_lsn  = stop_lsn;
@@ -1791,7 +1792,7 @@ write_history_file(const char *dir, uint32_t new_tli, uint32_t parent_tli,
 	char  path[PATH_MAX];
 	FILE *fp;
 
-	snprintf(path, sizeof(path), "%s/%08X.history", dir, new_tli);
+	TEST_SNPRINTF(path, "%s/%08X.history", dir, new_tli);
 	fp = fopen(path, "w");
 	if (fp == NULL)
 		return;
@@ -1838,7 +1839,7 @@ START_TEST(test_xchain_no_history_file)
 	BackupInfo    *prev = make_backup_node("PREV", 1, 0x1000000, 0x2000000, next);
 	WALArchiveInfo wi;
 
-	snprintf(dir, sizeof(dir), "/tmp/pg_xch_%d", (int)getpid());
+	TEST_SNPRINTF(dir, "/tmp/pg_xch_%d", (int)getpid());
 	mkdir(dir, 0755);
 	/* No history file written */
 	build_archive_from_segs(&wi, dir, NULL, 0);
@@ -1846,8 +1847,8 @@ START_TEST(test_xchain_no_history_file)
 	ValidationResult *r = check_wal_restore_chain(prev, &wi);
 
 	char cmd[80];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 	free(wi.segments);
 	free_chain(prev);
 
@@ -1875,7 +1876,7 @@ START_TEST(test_xchain_pre_switch_complete)
 	};
 	WALArchiveInfo wi;
 
-	snprintf(dir, sizeof(dir), "/tmp/pg_xch_%d", (int)getpid());
+	TEST_SNPRINTF(dir, "/tmp/pg_xch_%d", (int)getpid());
 	mkdir(dir, 0755);
 	write_history_file(dir, 2, 1, "0/5000000");
 	build_archive_from_segs(&wi, dir, segs, 5);
@@ -1883,8 +1884,8 @@ START_TEST(test_xchain_pre_switch_complete)
 	ValidationResult *r = check_wal_restore_chain(prev, &wi);
 
 	char cmd[80];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 	free(wi.segments);
 	free_chain(prev);
 
@@ -1909,7 +1910,7 @@ START_TEST(test_xchain_pre_switch_missing)
 	};
 	WALArchiveInfo wi;
 
-	snprintf(dir, sizeof(dir), "/tmp/pg_xch_%d", (int)getpid());
+	TEST_SNPRINTF(dir, "/tmp/pg_xch_%d", (int)getpid());
 	mkdir(dir, 0755);
 	write_history_file(dir, 2, 1, "0/5000000");
 	build_archive_from_segs(&wi, dir, segs, 4);
@@ -1917,8 +1918,8 @@ START_TEST(test_xchain_pre_switch_missing)
 	ValidationResult *r = check_wal_restore_chain(prev, &wi);
 
 	char cmd[80];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 	free(wi.segments);
 	free_chain(prev);
 
@@ -1944,7 +1945,7 @@ START_TEST(test_xchain_post_switch_missing)
 	};
 	WALArchiveInfo wi;
 
-	snprintf(dir, sizeof(dir), "/tmp/pg_xch_%d", (int)getpid());
+	TEST_SNPRINTF(dir, "/tmp/pg_xch_%d", (int)getpid());
 	mkdir(dir, 0755);
 	write_history_file(dir, 2, 1, "0/5000000");
 	build_archive_from_segs(&wi, dir, segs, 4);
@@ -1952,8 +1953,8 @@ START_TEST(test_xchain_post_switch_missing)
 	ValidationResult *r = check_wal_restore_chain(prev, &wi);
 
 	char cmd[80];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 	free(wi.segments);
 	free_chain(prev);
 
@@ -1984,7 +1985,7 @@ START_TEST(test_xchain_adjacent_to_switch)
 	};
 	WALArchiveInfo wi;
 
-	snprintf(dir, sizeof(dir), "/tmp/pg_xch_%d", (int)getpid());
+	TEST_SNPRINTF(dir, "/tmp/pg_xch_%d", (int)getpid());
 	mkdir(dir, 0755);
 	write_history_file(dir, 2, 1, "0/5000000");
 	build_archive_from_segs(&wi, dir, segs, 1);
@@ -1992,8 +1993,8 @@ START_TEST(test_xchain_adjacent_to_switch)
 	ValidationResult *r = check_wal_restore_chain(prev, &wi);
 
 	char cmd[80];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 	free(wi.segments);
 	free_chain(prev);
 
@@ -2022,7 +2023,7 @@ static void
 create_wal_stub(const char *dir, uint32_t tli, uint32_t seg_id)
 {
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/%08X%08X%08X", dir, tli, 0u, seg_id);
+	TEST_SNPRINTF(path, "%s/%08X%08X%08X", dir, tli, 0u, seg_id);
 	FILE *fp = fopen(path, "w");
 	if (fp != NULL) fclose(fp);
 }
@@ -2039,12 +2040,12 @@ START_TEST(test_stream_wal_all_present)
 	WALArchiveInfo *wi;
 	ValidationResult *r;
 
-	snprintf(backup_dir, sizeof(backup_dir), "/tmp/pg_strm_%d", (int)getpid());
-	snprintf(wal_dir,    sizeof(wal_dir),    "%s/database/pg_wal", backup_dir);
+	TEST_SNPRINTF(backup_dir, "/tmp/pg_strm_%d", (int)getpid());
+	TEST_SNPRINTF(wal_dir,    "%s/database/pg_wal", backup_dir);
 	mkdir(backup_dir, 0755);
 	{
 		char db_dir[PATH_MAX];
-		snprintf(db_dir, sizeof(db_dir), "%s/database", backup_dir);
+		TEST_SNPRINTF(db_dir, "%s/database", backup_dir);
 		mkdir(db_dir, 0755);
 	}
 	mkdir(wal_dir, 0755);
@@ -2063,8 +2064,8 @@ START_TEST(test_stream_wal_all_present)
 	wi = scan_wal_archive(wal_dir);
 
 	char cmd[PATH_MAX + 8];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", backup_dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", backup_dir);
+	TEST_SYSTEM(cmd);
 
 	ck_assert_ptr_nonnull(wi);
 	r = check_wal_availability(&bi, wi);
@@ -2088,12 +2089,12 @@ START_TEST(test_stream_wal_missing_segment)
 	WALArchiveInfo *wi;
 	ValidationResult *r;
 
-	snprintf(backup_dir, sizeof(backup_dir), "/tmp/pg_strm_%d", (int)getpid());
-	snprintf(wal_dir,    sizeof(wal_dir),    "%s/database/pg_wal", backup_dir);
+	TEST_SNPRINTF(backup_dir, "/tmp/pg_strm_%d", (int)getpid());
+	TEST_SNPRINTF(wal_dir,    "%s/database/pg_wal", backup_dir);
 	mkdir(backup_dir, 0755);
 	{
 		char db_dir[PATH_MAX];
-		snprintf(db_dir, sizeof(db_dir), "%s/database", backup_dir);
+		TEST_SNPRINTF(db_dir, "%s/database", backup_dir);
 		mkdir(db_dir, 0755);
 	}
 	mkdir(wal_dir, 0755);
@@ -2112,8 +2113,8 @@ START_TEST(test_stream_wal_missing_segment)
 	wi = scan_wal_archive(wal_dir);
 
 	char cmd[PATH_MAX + 8];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", backup_dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", backup_dir);
+	TEST_SYSTEM(cmd);
 
 	ck_assert_ptr_nonnull(wi);
 	r = check_wal_availability(&bi, wi);
@@ -2137,12 +2138,12 @@ START_TEST(test_stream_wal_empty_dir)
 	WALArchiveInfo *wi;
 	ValidationResult *r;
 
-	snprintf(backup_dir, sizeof(backup_dir), "/tmp/pg_strm_%d", (int)getpid());
-	snprintf(wal_dir,    sizeof(wal_dir),    "%s/database/pg_wal", backup_dir);
+	TEST_SNPRINTF(backup_dir, "/tmp/pg_strm_%d", (int)getpid());
+	TEST_SNPRINTF(wal_dir,    "%s/database/pg_wal", backup_dir);
 	mkdir(backup_dir, 0755);
 	{
 		char db_dir[PATH_MAX];
-		snprintf(db_dir, sizeof(db_dir), "%s/database", backup_dir);
+		TEST_SNPRINTF(db_dir, "%s/database", backup_dir);
 		mkdir(db_dir, 0755);
 	}
 	mkdir(wal_dir, 0755);
@@ -2158,8 +2159,8 @@ START_TEST(test_stream_wal_empty_dir)
 	wi = scan_wal_archive(wal_dir);
 
 	char cmd[PATH_MAX + 8];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", backup_dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", backup_dir);
+	TEST_SYSTEM(cmd);
 
 	ck_assert_ptr_nonnull(wi);
 	r = check_wal_availability(&bi, wi);
@@ -2251,12 +2252,12 @@ START_TEST(test_seg_size_1mb_avail)
 	ValidationResult *r;
 	uint32_t        sz = 0x100000;   /* 1 MB */
 
-	snprintf(dir, sizeof(dir), "/tmp/pg_sz1mb_%d", (int)getpid());
+	TEST_SNPRINTF(dir, "/tmp/pg_sz1mb_%d", (int)getpid());
 	mkdir(dir, 0755);
 
 	for (int s = 1; s <= 3; s++)
 	{
-		snprintf(seg, sizeof(seg), "%s/0000000100000000%08X", dir, s);
+		TEST_SNPRINTF(seg, "%s/0000000100000000%08X", dir, s);
 		write_wal_seg_with_size(seg, 1, (uint64_t)s * sz, sz);
 	}
 
@@ -2274,8 +2275,8 @@ START_TEST(test_seg_size_1mb_avail)
 	free_wal_archive_info(wi);
 
 	char cmd[PATH_MAX + 8];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 
 	ck_assert_ptr_nonnull(r);
 	ck_assert_int_eq(r->error_count, 0);
@@ -2297,12 +2298,12 @@ START_TEST(test_seg_size_1mb_headers)
 	ValidationResult *r;
 	uint32_t        sz = 0x100000;   /* 1 MB */
 
-	snprintf(dir, sizeof(dir), "/tmp/pg_sz1mbh_%d", (int)getpid());
+	TEST_SNPRINTF(dir, "/tmp/pg_sz1mbh_%d", (int)getpid());
 	mkdir(dir, 0755);
 
 	for (int s = 1; s <= 3; s++)
 	{
-		snprintf(seg, sizeof(seg), "%s/0000000100000000%08X", dir, s);
+		TEST_SNPRINTF(seg, "%s/0000000100000000%08X", dir, s);
 		write_wal_seg_with_size(seg, 1, (uint64_t)s * sz, sz);
 	}
 
@@ -2319,8 +2320,8 @@ START_TEST(test_seg_size_1mb_headers)
 	free_wal_archive_info(wi);
 
 	char cmd[PATH_MAX + 8];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", dir);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
 
 	ck_assert_ptr_nonnull(r);
 	ck_assert_int_eq(r->error_count, 0);

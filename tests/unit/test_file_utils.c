@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "pg_backup_auditor.h"
+#include "test_helpers.h"
 
 /* Test fixtures */
 static char test_dir[PATH_MAX];
@@ -36,25 +37,25 @@ static char test_subdir[PATH_MAX];
 static void
 setup_test_files(void)
 {
-	snprintf(test_dir, sizeof(test_dir), "/tmp/file_utils_test_%d", getpid());
+	TEST_SNPRINTF(test_dir, "/tmp/file_utils_test_%d", getpid());
 	mkdir(test_dir, 0755);
 
-	snprintf(test_file, sizeof(test_file), "%s/testfile.txt", test_dir);
+	TEST_SNPRINTF(test_file, "%s/testfile.txt", test_dir);
 	FILE *fp = fopen(test_file, "w");
 	fprintf(fp, "hello world\n");
 	fclose(fp);
 
-	snprintf(test_subdir, sizeof(test_subdir), "%s/subdir", test_dir);
+	TEST_SNPRINTF(test_subdir, "%s/subdir", test_dir);
 	mkdir(test_subdir, 0755);
 
 	/* Create some files in subdir */
 	char subfile[PATH_MAX];
-	snprintf(subfile, sizeof(subfile), "%s/file1.txt", test_subdir);
+	TEST_SNPRINTF(subfile, "%s/file1.txt", test_subdir);
 	fp = fopen(subfile, "w");
 	fprintf(fp, "content1\n");
 	fclose(fp);
 
-	snprintf(subfile, sizeof(subfile), "%s/file2.txt", test_subdir);
+	TEST_SNPRINTF(subfile, "%s/file2.txt", test_subdir);
 	fp = fopen(subfile, "w");
 	fprintf(fp, "content2\n");
 	fclose(fp);
@@ -65,8 +66,8 @@ static void
 teardown_test_files(void)
 {
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", test_dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", test_dir);
+	TEST_SYSTEM(cmd);
 }
 
 /* Test: file_exists for existing file */
@@ -87,7 +88,7 @@ START_TEST(test_file_exists_false)
 	setup_test_files();
 
 	char nonexistent[PATH_MAX];
-	snprintf(nonexistent, sizeof(nonexistent), "%s/nonexistent.txt", test_dir);
+	TEST_SNPRINTF(nonexistent, "%s/nonexistent.txt", test_dir);
 
 	bool result = file_exists(nonexistent);
 	ck_assert_int_eq(result, false);
@@ -224,7 +225,7 @@ START_TEST(test_compute_file_crc32c_nonexistent)
 	setup_test_files();
 
 	char nonexistent[PATH_MAX];
-	snprintf(nonexistent, sizeof(nonexistent), "%s/nonexistent.txt", test_dir);
+	TEST_SNPRINTF(nonexistent, "%s/nonexistent.txt", test_dir);
 
 	uint32_t crc = 0;
 	bool success = compute_file_crc32c(nonexistent, &crc);

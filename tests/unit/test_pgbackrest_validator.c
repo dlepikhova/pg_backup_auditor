@@ -26,6 +26,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "pg_backup_auditor.h"
+#include "test_helpers.h"
 
 /* Test fixtures */
 static char test_dir[PATH_MAX];
@@ -35,36 +36,36 @@ static char valid_backup_dir[PATH_MAX];
 static void
 setup_test_directories(void)
 {
-	snprintf(test_dir, sizeof(test_dir), "/tmp/pgbr_validator_test_%d", getpid());
+	TEST_SNPRINTF(test_dir, "/tmp/pgbr_validator_test_%d", getpid());
 	mkdir(test_dir, 0755);
 
 	/* Valid pgBackRest directory structure */
-	snprintf(valid_backup_dir, sizeof(valid_backup_dir), "%s/valid", test_dir);
+	TEST_SNPRINTF(valid_backup_dir, "%s/valid", test_dir);
 	mkdir(valid_backup_dir, 0755);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/pg_data", valid_backup_dir);
+	TEST_SNPRINTF(path, "%s/pg_data", valid_backup_dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/pg_data/global", valid_backup_dir);
+	TEST_SNPRINTF(path, "%s/pg_data/global", valid_backup_dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/pg_data/global/pg_control", valid_backup_dir);
+	TEST_SNPRINTF(path, "%s/pg_data/global/pg_control", valid_backup_dir);
 	FILE *fp = fopen(path, "w");
 	fprintf(fp, "dummy pg_control\n");
 	fclose(fp);
 
-	snprintf(path, sizeof(path), "%s/pg_data/PG_VERSION", valid_backup_dir);
+	TEST_SNPRINTF(path, "%s/pg_data/PG_VERSION", valid_backup_dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "14\n");
 	fclose(fp);
 
-	snprintf(path, sizeof(path), "%s/backup.manifest", valid_backup_dir);
+	TEST_SNPRINTF(path, "%s/backup.manifest", valid_backup_dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "[backup]\ndb-version=140000\n");
 	fclose(fp);
 
-	snprintf(path, sizeof(path), "%s/manifest.copy", valid_backup_dir);
+	TEST_SNPRINTF(path, "%s/manifest.copy", valid_backup_dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "# manifest copy\n");
 	fclose(fp);
@@ -75,8 +76,8 @@ static void
 teardown_test_directories(void)
 {
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", test_dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", test_dir);
+	TEST_SYSTEM(cmd);
 }
 
 /* Test: Valid pgBackRest structure */
@@ -86,7 +87,7 @@ START_TEST(test_valid_structure)
 
 	BackupInfo info;
 	memset(&info, 0, sizeof(info));
-	snprintf(info.backup_path, sizeof(info.backup_path), "%s", valid_backup_dir);
+	TEST_SNPRINTF(info.backup_path, "%s", valid_backup_dir);
 	info.tool = BACKUP_TOOL_PGBACKREST;
 	info.type = BACKUP_TYPE_FULL;
 

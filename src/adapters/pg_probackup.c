@@ -478,7 +478,7 @@ pg_probackup_read_metadata(const char *backup_path, BackupInfo *info)
 		if (value[0] != '\0')
 		{
 			if (strcmp(value, "none") != 0)
-				snprintf(info->compress_alg, sizeof(info->compress_alg), "%s", value);
+				str_copy(info->compress_alg, value, sizeof(info->compress_alg));
 			value[0] = '\0';
 			continue;
 		}

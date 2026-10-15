@@ -27,6 +27,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "pg_backup_auditor.h"
+#include "test_helpers.h"
 
 /* Test fixtures - temporary directories for testing */
 static char test_dir[PATH_MAX];
@@ -39,21 +40,21 @@ static void
 setup_test_directories(void)
 {
 	/* Create base test directory */
-	snprintf(test_dir, sizeof(test_dir), "/tmp/pg_backup_test_%d", getpid());
+	TEST_SNPRINTF(test_dir, "/tmp/pg_backup_test_%d", getpid());
 	mkdir(test_dir, 0755);
 
 	/* Create plain format backup directory */
-	snprintf(plain_backup_dir, sizeof(plain_backup_dir), "%s/plain_backup", test_dir);
+	TEST_SNPRINTF(plain_backup_dir, "%s/plain_backup", test_dir);
 	mkdir(plain_backup_dir, 0755);
 
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/base", plain_backup_dir);
+	TEST_SNPRINTF(path, "%s/base", plain_backup_dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/global", plain_backup_dir);
+	TEST_SNPRINTF(path, "%s/global", plain_backup_dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/backup_label", plain_backup_dir);
+	TEST_SNPRINTF(path, "%s/backup_label", plain_backup_dir);
 	FILE *fp = fopen(path, "w");
 	fprintf(fp, "START WAL LOCATION: 0/2000028 (file 000000010000000000000002)\n");
 	fprintf(fp, "CHECKPOINT LOCATION: 0/2000060\n");
@@ -65,21 +66,21 @@ setup_test_directories(void)
 	fclose(fp);
 
 	/* Add PG_VERSION file */
-	snprintf(path, sizeof(path), "%s/PG_VERSION", plain_backup_dir);
+	TEST_SNPRINTF(path, "%s/PG_VERSION", plain_backup_dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "17\n");
 	fclose(fp);
 
 	/* Create tar format backup directory */
-	snprintf(tar_backup_dir, sizeof(tar_backup_dir), "%s/tar_backup", test_dir);
+	TEST_SNPRINTF(tar_backup_dir, "%s/tar_backup", test_dir);
 	mkdir(tar_backup_dir, 0755);
 
-	snprintf(path, sizeof(path), "%s/base.tar.gz", tar_backup_dir);
+	TEST_SNPRINTF(path, "%s/base.tar.gz", tar_backup_dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "dummy tar file\n");
 	fclose(fp);
 
-	snprintf(path, sizeof(path), "%s/backup_label", tar_backup_dir);
+	TEST_SNPRINTF(path, "%s/backup_label", tar_backup_dir);
 	fp = fopen(path, "w");
 	fprintf(fp, "START WAL LOCATION: 0/3000028 (file 000000010000000000000003)\n");
 	fprintf(fp, "START TIME: 2024-01-09 14:30:15 UTC\n");
@@ -87,13 +88,13 @@ setup_test_directories(void)
 	fclose(fp);
 
 	/* Create invalid backup directory (missing markers) */
-	snprintf(invalid_backup_dir, sizeof(invalid_backup_dir), "%s/invalid", test_dir);
+	TEST_SNPRINTF(invalid_backup_dir, "%s/invalid", test_dir);
 	mkdir(invalid_backup_dir, 0755);
 
-	snprintf(path, sizeof(path), "%s/base", invalid_backup_dir);
+	TEST_SNPRINTF(path, "%s/base", invalid_backup_dir);
 	mkdir(path, 0755);
 
-	snprintf(path, sizeof(path), "%s/global", invalid_backup_dir);
+	TEST_SNPRINTF(path, "%s/global", invalid_backup_dir);
 	mkdir(path, 0755);
 	/* No backup_label or backup_manifest - invalid */
 }
@@ -103,8 +104,8 @@ static void
 teardown_test_directories(void)
 {
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", test_dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", test_dir);
+	TEST_SYSTEM(cmd);
 }
 
 /* Test: pg_basebackup_detect() for plain format */
@@ -199,7 +200,7 @@ START_TEST(test_scan_missing_backup_label)
 
 	/* Remove backup_label from tar backup */
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/backup_label", tar_backup_dir);
+	TEST_SNPRINTF(path, "%s/backup_label", tar_backup_dir);
 	unlink(path);
 
 	BackupInfo *info = pg_basebackup_adapter.scan(tar_backup_dir);
@@ -376,7 +377,7 @@ START_TEST(test_pg_version_with_minor)
 
 	/* Override PG_VERSION with minor version */
 	char path[PATH_MAX];
-	snprintf(path, sizeof(path), "%s/PG_VERSION", plain_backup_dir);
+	TEST_SNPRINTF(path, "%s/PG_VERSION", plain_backup_dir);
 	FILE *fp = fopen(path, "w");
 	fprintf(fp, "16.1\n");
 	fclose(fp);
@@ -441,16 +442,16 @@ setup_tar_manifest_backup(void)
 	char cmd[PATH_MAX * 3];
 	FILE *fp;
 
-	snprintf(tar_manifest_dir, sizeof(tar_manifest_dir),
+	TEST_SNPRINTF(tar_manifest_dir,
 			 "/tmp/pg_bb_tar_manifest_test_%d", getpid());
 	mkdir(tar_manifest_dir, 0755);
 
 	/* Temp directory to stage files that go inside the archive */
-	snprintf(tmpdir, sizeof(tmpdir), "%s/_stage", tar_manifest_dir);
+	TEST_SNPRINTF(tmpdir, "%s/_stage", tar_manifest_dir);
 	mkdir(tmpdir, 0755);
 
 	/* backup_label */
-	snprintf(path, sizeof(path), "%s/backup_label", tmpdir);
+	TEST_SNPRINTF(path, "%s/backup_label", tmpdir);
 	fp = fopen(path, "w");
 	fprintf(fp, "START WAL LOCATION: 0/3000028 (file 000000010000000000000003)\n");
 	fprintf(fp, "CHECKPOINT LOCATION: 0/3000060\n");
@@ -462,7 +463,7 @@ setup_tar_manifest_backup(void)
 	fclose(fp);
 
 	/* backup_manifest with End-LSN 0/5000000 */
-	snprintf(path, sizeof(path), "%s/backup_manifest", tmpdir);
+	TEST_SNPRINTF(path, "%s/backup_manifest", tmpdir);
 	fp = fopen(path, "w");
 	fprintf(fp, "{ \"PostgreSQL-Backup-Manifest-Version\": 1,\n");
 	fprintf(fp, "\"Files\": [],\n");
@@ -471,22 +472,22 @@ setup_tar_manifest_backup(void)
 	fclose(fp);
 
 	/* Bundle into base.tar.gz */
-	snprintf(cmd, sizeof(cmd),
+	TEST_SNPRINTF(cmd,
 			 "tar czf '%s/base.tar.gz' -C '%s' backup_label backup_manifest 2>/dev/null",
 			 tar_manifest_dir, tmpdir);
-	system(cmd);
+	TEST_SYSTEM(cmd);
 
 	/* Remove staging dir — only the archive remains */
-	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmpdir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf '%s'", tmpdir);
+	TEST_SYSTEM(cmd);
 }
 
 static void
 teardown_tar_manifest_backup(void)
 {
 	char cmd[PATH_MAX + 20];
-	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tar_manifest_dir);
-	system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf '%s'", tar_manifest_dir);
+	TEST_SYSTEM(cmd);
 }
 
 START_TEST(test_stop_lsn_from_tar_manifest)

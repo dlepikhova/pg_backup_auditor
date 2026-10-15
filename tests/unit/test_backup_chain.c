@@ -14,6 +14,7 @@
 
 #include "pg_backup_auditor.h"
 #include "backup_chain.h"
+#include "test_helpers.h"
 
 /*
  * Allocate a BackupInfo populated with just the fields chain grouping
@@ -28,9 +29,9 @@ static BackupInfo *
 mk(BackupInfo **head, const char *id, BackupType type, const char *parent, time_t t)
 {
 	BackupInfo *b = calloc(1, sizeof(*b));
-	strncpy(b->backup_id, id, sizeof(b->backup_id) - 1);
+	str_copy(b->backup_id, id, sizeof(b->backup_id));
 	if (parent != NULL)
-		strncpy(b->parent_backup_id, parent, sizeof(b->parent_backup_id) - 1);
+		str_copy(b->parent_backup_id, parent, sizeof(b->parent_backup_id));
 	b->type = type;
 	b->start_time = t;
 	b->next = *head;

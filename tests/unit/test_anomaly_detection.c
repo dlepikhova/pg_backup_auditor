@@ -17,6 +17,8 @@
 #include <time.h>
 #include <stdbool.h>
 #include "../include/types.h"
+#include "common.h"
+#include "test_helpers.h"
 
 /* Forward declarations of functions we're testing */
 typedef struct {
@@ -53,7 +55,7 @@ create_backup(const char *id, BackupTool tool, BackupType type,
 			  uint64_t size, time_t start, time_t duration)
 {
 	BackupInfo *b = calloc(1, sizeof(BackupInfo));
-	strncpy(b->backup_id, id, sizeof(b->backup_id) - 1);
+	str_copy(b->backup_id, id, sizeof(b->backup_id));
 	b->tool = tool;
 	b->type = type;
 	b->status = BACKUP_STATUS_OK;

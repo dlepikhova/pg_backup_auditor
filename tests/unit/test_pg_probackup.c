@@ -32,6 +32,7 @@
 #include "../../include/common.h"
 #include "../../include/adapter.h"
 #include "test_integration_helpers.h"
+#include "test_helpers.h"
 
 /* ------------------------------------------------------------------ *
  * Helpers
@@ -49,7 +50,7 @@ make_probackup_dir(const char *base, bool with_control, bool with_database)
 	if (with_control)
 	{
 		char path[PATH_MAX];
-		snprintf(path, sizeof(path), "%s/backup.control", base);
+		TEST_SNPRINTF(path, "%s/backup.control", base);
 		FILE *f = fopen(path, "w");
 		if (f) { fputs("backup-id = TESTXXX\n", f); fclose(f); }
 	}
@@ -57,7 +58,7 @@ make_probackup_dir(const char *base, bool with_control, bool with_database)
 	if (with_database)
 	{
 		char path[PATH_MAX];
-		snprintf(path, sizeof(path), "%s/database", base);
+		TEST_SNPRINTF(path, "%s/database", base);
 		mkdir(path, 0755);
 	}
 }
@@ -66,8 +67,8 @@ static void
 rm_rf(const char *path)
 {
 	char cmd[PATH_MAX + 8];
-	snprintf(cmd, sizeof(cmd), "rm -rf %s", path);
-	(void)system(cmd);
+	TEST_SNPRINTF(cmd, "rm -rf %s", path);
+	TEST_SYSTEM(cmd);
 }
 
 /* ------------------------------------------------------------------ *
@@ -85,7 +86,7 @@ END_TEST
 START_TEST(test_detect_valid)
 {
 	char tmp[64];
-	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_valid_%d", (int)getpid());
+	TEST_SNPRINTF(tmp, "/tmp/pg_pp_valid_%d", (int)getpid());
 	make_probackup_dir(tmp, true, true);
 
 	ck_assert(pg_probackup_adapter.detect(tmp));
@@ -98,7 +99,7 @@ END_TEST
 START_TEST(test_detect_no_control)
 {
 	char tmp[64];
-	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_noctl_%d", (int)getpid());
+	TEST_SNPRINTF(tmp, "/tmp/pg_pp_noctl_%d", (int)getpid());
 	make_probackup_dir(tmp, false, true);
 
 	ck_assert(!pg_probackup_adapter.detect(tmp));
@@ -111,7 +112,7 @@ END_TEST
 START_TEST(test_detect_no_database)
 {
 	char tmp[64];
-	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_nodb_%d", (int)getpid());
+	TEST_SNPRINTF(tmp, "/tmp/pg_pp_nodb_%d", (int)getpid());
 	make_probackup_dir(tmp, true, false);
 
 	ck_assert(!pg_probackup_adapter.detect(tmp));
@@ -135,8 +136,8 @@ scan_with_control(const char *tmp_base, const char *mode, const char *status)
 	char db_dir[PATH_MAX];
 	char ctl_path[PATH_MAX];
 
-	snprintf(db_dir,  sizeof(db_dir),  "%s/database", tmp_base);
-	snprintf(ctl_path, sizeof(ctl_path), "%s/backup.control", tmp_base);
+	TEST_SNPRINTF(db_dir,  "%s/database", tmp_base);
+	TEST_SNPRINTF(ctl_path, "%s/backup.control", tmp_base);
 
 	mkdir(tmp_base, 0755);
 	mkdir(db_dir,   0755);
@@ -157,7 +158,7 @@ scan_with_control(const char *tmp_base, const char *mode, const char *status)
 START_TEST(test_parse_status_running)
 {
 	char tmp[64];
-	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_run_%d", (int)getpid());
+	TEST_SNPRINTF(tmp, "/tmp/pg_pp_run_%d", (int)getpid());
 
 	BackupInfo *b = scan_with_control(tmp, "FULL", "RUNNING");
 	rm_rf(tmp);
@@ -180,7 +181,7 @@ START_TEST(test_parse_status_all)
 		{"BOGUS", BACKUP_STATUS_UNKNOWN},
 	};
 	char tmp[64];
-	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_status_%d", (int)getpid());
+	TEST_SNPRINTF(tmp, "/tmp/pg_pp_status_%d", (int)getpid());
 
 	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
 	{
@@ -200,9 +201,9 @@ START_TEST(test_parse_missing_status_and_mode)
 	char tmp[64];
 	char db_dir[PATH_MAX];
 	char ctl_path[PATH_MAX];
-	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_nostatus_%d", (int)getpid());
-	snprintf(db_dir,  sizeof(db_dir),  "%s/database", tmp);
-	snprintf(ctl_path, sizeof(ctl_path), "%s/backup.control", tmp);
+	TEST_SNPRINTF(tmp, "/tmp/pg_pp_nostatus_%d", (int)getpid());
+	TEST_SNPRINTF(db_dir,  "%s/database", tmp);
+	TEST_SNPRINTF(ctl_path, "%s/backup.control", tmp);
 	mkdir(tmp, 0755);
 	mkdir(db_dir, 0755);
 
@@ -226,7 +227,7 @@ END_TEST
 START_TEST(test_parse_mode_page)
 {
 	char tmp[64];
-	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_page_%d", (int)getpid());
+	TEST_SNPRINTF(tmp, "/tmp/pg_pp_page_%d", (int)getpid());
 
 	BackupInfo *b = scan_with_control(tmp, "PAGE", "OK");
 	rm_rf(tmp);
@@ -241,7 +242,7 @@ END_TEST
 START_TEST(test_parse_mode_ptrack)
 {
 	char tmp[64];
-	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_ptrack_%d", (int)getpid());
+	TEST_SNPRINTF(tmp, "/tmp/pg_pp_ptrack_%d", (int)getpid());
 
 	BackupInfo *b = scan_with_control(tmp, "PTRACK", "OK");
 	rm_rf(tmp);
@@ -256,7 +257,7 @@ END_TEST
 START_TEST(test_parse_status_orphan)
 {
 	char tmp[64];
-	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_orphan_%d", (int)getpid());
+	TEST_SNPRINTF(tmp, "/tmp/pg_pp_orphan_%d", (int)getpid());
 
 	BackupInfo *b = scan_with_control(tmp, "DELTA", "ORPHAN");
 	rm_rf(tmp);
@@ -274,9 +275,9 @@ START_TEST(test_parse_from_replica_standby)
 	char db_dir[PATH_MAX];
 	char ctl_path[PATH_MAX];
 
-	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_replica_%d", (int)getpid());
-	snprintf(db_dir,  sizeof(db_dir),  "%s/database", tmp);
-	snprintf(ctl_path, sizeof(ctl_path), "%s/backup.control", tmp);
+	TEST_SNPRINTF(tmp, "/tmp/pg_pp_replica_%d", (int)getpid());
+	TEST_SNPRINTF(db_dir,  "%s/database", tmp);
+	TEST_SNPRINTF(ctl_path, "%s/backup.control", tmp);
 
 	mkdir(tmp, 0755);
 	mkdir(db_dir, 0755);
@@ -307,9 +308,9 @@ START_TEST(test_parse_from_replica_primary)
 	char db_dir[PATH_MAX];
 	char ctl_path[PATH_MAX];
 
-	snprintf(tmp, sizeof(tmp), "/tmp/pg_pp_primary_%d", (int)getpid());
-	snprintf(db_dir,  sizeof(db_dir),  "%s/database", tmp);
-	snprintf(ctl_path, sizeof(ctl_path), "%s/backup.control", tmp);
+	TEST_SNPRINTF(tmp, "/tmp/pg_pp_primary_%d", (int)getpid());
+	TEST_SNPRINTF(db_dir,  "%s/database", tmp);
+	TEST_SNPRINTF(ctl_path, "%s/backup.control", tmp);
 
 	mkdir(tmp, 0755);
 	mkdir(db_dir, 0755);
@@ -344,9 +345,9 @@ END_TEST
 START_TEST(test_parse_control_prefix_collision)
 {
 	char tmp[64], db_dir[PATH_MAX], ctl_path[PATH_MAX];
-	snprintf(tmp,      sizeof(tmp),      "/tmp/pg_pp_prefix_%d", (int)getpid());
-	snprintf(db_dir,   sizeof(db_dir),   "%s/database", tmp);
-	snprintf(ctl_path, sizeof(ctl_path), "%s/backup.control", tmp);
+	TEST_SNPRINTF(tmp,      "/tmp/pg_pp_prefix_%d", (int)getpid());
+	TEST_SNPRINTF(db_dir,   "%s/database", tmp);
+	TEST_SNPRINTF(ctl_path, "%s/backup.control", tmp);
 	mkdir(tmp, 0755);
 	mkdir(db_dir, 0755);
 
@@ -377,7 +378,7 @@ START_TEST(test_scan_real_full_backup)
 	INTEGRATION_SKIP_BACKUP();
 
 	char backup_path[PATH_MAX];
-	snprintf(backup_path, sizeof(backup_path),
+	TEST_SNPRINTF(backup_path,
 			 "%s/backups/%s/%s",
 			 get_test_catalog(), get_test_instance(), get_test_backup_id());
 

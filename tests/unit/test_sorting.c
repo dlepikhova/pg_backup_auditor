@@ -24,6 +24,8 @@
 #include <string.h>
 #include <check.h>
 #include "../../include/types.h"
+#include "common.h"
+#include "test_helpers.h"
 
 /* Helper function to create a test backup */
 static BackupInfo*
@@ -32,7 +34,7 @@ create_test_backup(const char *backup_id, time_t start_time)
 	BackupInfo *backup = malloc(sizeof(BackupInfo));
 	memset(backup, 0, sizeof(BackupInfo));
 
-	strncpy(backup->backup_id, backup_id, sizeof(backup->backup_id) - 1);
+	str_copy(backup->backup_id, backup_id, sizeof(backup->backup_id));
 	backup->start_time = start_time;
 	backup->tool = BACKUP_TOOL_PG_PROBACKUP;
 	backup->type = BACKUP_TYPE_FULL;
