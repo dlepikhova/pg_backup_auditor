@@ -23,26 +23,6 @@ conf_data.set_quoted('PROJECT_NAME', meson.project_name())
 # Platform detection
 host_system = host_machine.system()
 
-# Find PostgreSQL
-pg_config = find_program('pg_config', required: false)
-
-if pg_config.found()
-  pg_includedir = run_command(pg_config, '--includedir', check: true).stdout().strip()
-  pg_includedir_server = run_command(pg_config, '--includedir-server', check: true).stdout().strip()
-
-  inc_postgresql = [
-    include_directories(pg_includedir),
-    include_directories(pg_includedir_server),
-  ]
-
-  message('Found PostgreSQL:')
-  message('  Include dir: ' + pg_includedir)
-  message('  Server include dir: ' + pg_includedir_server)
-else
-  warning('pg_config not found - building without PostgreSQL headers')
-  inc_postgresql = []
-endif
-
 # Include directories
 inc_dirs = include_directories('include')
 
@@ -125,7 +105,7 @@ endif
 # Main executable
 executable('pg_backup_auditor',
   sources,
-  include_directories: [inc_dirs, inc_postgresql],
+  include_directories: inc_dirs,
   c_args: c_args,
   dependencies: deps,
   install: true,
@@ -144,7 +124,6 @@ install_data('docs/INSTALL.md',
 summary({
   'prefix': get_option('prefix'),
   'bindir': get_option('bindir'),
-  'PostgreSQL': pg_config.found() ? 'yes' : 'no',
   'zlib': zlib_dep.found() ? 'yes' : 'no',
   'json-c': jsonc_dep.found() ? 'yes' : 'no',
   'yaml': yaml_dep.found() ? 'yes' : 'no',

@@ -82,7 +82,6 @@ pg_backup_auditor 0.3.0
   Configuration
     prefix    : /opt/homebrew
     bindir    : bin
-    PostgreSQL: yes
     zlib      : yes
     json-c    : no
     yaml      : no
@@ -92,19 +91,18 @@ pg_backup_auditor 0.3.0
 
 Meson automatically detects and enables optional features:
 
-- **PostgreSQL** (`pg_config`): Required for PostgreSQL headers
 - **zlib**: Compressed backup support
 
 ### Installing Dependencies
 
 **macOS**:
 ```bash
-brew install postgresql zlib
+brew install zlib
 ```
 
 **Ubuntu/Debian**:
 ```bash
-sudo apt install postgresql-server-dev-all zlib1g-dev
+sudo apt install zlib1g-dev
 ```
 
 ## Build Targets
@@ -269,14 +267,6 @@ meson compile -C builddir --profile
 
 ## Troubleshooting
 
-### pg_config not found
-
-```bash
-# Specify pg_config location
-export PATH="/usr/pgsql-16/bin:$PATH"
-meson setup builddir --reconfigure
-```
-
 ### Dependencies not found
 
 ```bash
@@ -306,8 +296,6 @@ CC=gcc meson setup builddir
 # Custom flags
 CFLAGS="-march=native" meson setup builddir
 
-# Custom pg_config
-PG_CONFIG=/usr/pgsql-16/bin/pg_config meson setup builddir
 ```
 
 ### Build Types

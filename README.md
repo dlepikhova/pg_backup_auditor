@@ -38,7 +38,6 @@
 - macOS, Linux, or FreeBSD
 
 **Optional:**
-- PostgreSQL headers (`pg_config` in PATH)
 - Meson >= 0.55.0 + Ninja (alternative build system)
 - zlib (compressed backup support)
 - libcheck (`apt install check` / `brew install check`) — required for `make test`

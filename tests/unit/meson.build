@@ -55,7 +55,7 @@ test_c_args = c_args + ['-Wno-error=gnu-zero-variadic-macro-arguments']
 # Build test runner
 test_runner = executable('test_runner',
   test_sources + test_common_sources,
-  include_directories: [inc_dirs, inc_postgresql],
+  include_directories: inc_dirs,
   c_args: test_c_args,
   dependencies: [check_dep, deps],
 )

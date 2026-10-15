@@ -6,16 +6,14 @@
 
 - C11-compatible compiler (GCC 7+ or Clang 10+)
 - Make
-- PostgreSQL development headers (optional — for `pg_config` detection)
+
+PostgreSQL itself is not needed: the auditor reads backup files directly and does not use PostgreSQL headers or libraries.
 
 ### macOS
 
 ```bash
 # Install Xcode Command Line Tools
 xcode-select --install
-
-# Install PostgreSQL (choose one)
-brew install postgresql@17
 
 # For running tests (optional)
 brew install check
@@ -25,7 +23,7 @@ brew install check
 
 ```bash
 sudo apt update
-sudo apt install build-essential postgresql-server-dev-17
+sudo apt install build-essential
 
 # For running tests (optional)
 sudo apt install check
@@ -34,7 +32,7 @@ sudo apt install check
 ### RHEL/Rocky/AlmaLinux
 
 ```bash
-sudo dnf install gcc make postgresql17-devel
+sudo dnf install gcc make
 
 # For running tests (optional)
 sudo dnf install check check-devel
@@ -43,7 +41,7 @@ sudo dnf install check check-devel
 ### FreeBSD
 
 ```bash
-sudo pkg install postgresql17-client gmake
+sudo pkg install gmake
 
 # For running tests (optional)
 sudo pkg install check
@@ -62,12 +60,6 @@ make
 
 ```bash
 make DEBUG=1
-```
-
-### Specify PostgreSQL Version
-
-```bash
-make PG_CONFIG=/path/to/pg_config
 ```
 
 ## Installation
@@ -107,14 +99,6 @@ sudo make uninstall PREFIX=/usr/local
 
 ## Troubleshooting
 
-### pg_config not found
-
-Set the `PG_CONFIG` variable:
-
-```bash
-make PG_CONFIG=/usr/pgsql-16/bin/pg_config
-```
-
 ### Compilation errors on macOS
 
 Ensure you're using Clang:
@@ -140,7 +124,3 @@ sudo dnf install check check-devel
 # FreeBSD
 sudo pkg install check
 ```
-
-### Missing PostgreSQL headers
-
-Install the development package for your PostgreSQL version.
