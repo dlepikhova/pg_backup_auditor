@@ -140,10 +140,6 @@ install_data('docs/INSTALL.md',
   install_dir: get_option('datadir') / 'doc' / 'pg_backup_auditor'
 )
 
-install_data('docs/DEVELOPER.md',
-  install_dir: get_option('datadir') / 'doc' / 'pg_backup_auditor'
-)
-
 # Summary
 summary({
   'prefix': get_option('prefix'),
