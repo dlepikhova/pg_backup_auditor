@@ -9,31 +9,21 @@ UNAME_M := $(shell uname -m)
 ifeq ($(UNAME_S),Darwin)
     ifeq ($(UNAME_M),arm64)
         PREFIX ?= /opt/homebrew
-        PG_CONFIG ?= /opt/homebrew/bin/pg_config
     else
         PREFIX ?= /usr/local
-        PG_CONFIG ?= /usr/local/bin/pg_config
     endif
     CC = clang
 else ifeq ($(UNAME_S),Linux)
     PREFIX ?= /usr/local
-    PG_CONFIG ?= pg_config
     CC ?= gcc
 else ifeq ($(UNAME_S),FreeBSD)
     PREFIX ?= /usr/local
-    PG_CONFIG ?= /usr/local/bin/pg_config
     CC = clang
 endif
 
 # Compiler flags
 CFLAGS = -std=c11 -Wall -Wextra -Werror -O2
 CFLAGS += -I./include
-# PostgreSQL headers are optional: the code does not include them
-PG_INCLUDEDIR := $(shell $(PG_CONFIG) --includedir 2>/dev/null)
-PG_INCLUDEDIR_SERVER := $(shell $(PG_CONFIG) --includedir-server 2>/dev/null)
-ifneq ($(PG_INCLUDEDIR),)
-    CFLAGS += -I$(PG_INCLUDEDIR) -I$(PG_INCLUDEDIR_SERVER)
-endif
 
 # Linker flags
 LDFLAGS = -lm
@@ -182,6 +172,5 @@ help:
 	@echo ""
 	@echo "Variables:"
 	@echo "  PREFIX     - Installation prefix (default: $(PREFIX))"
-	@echo "  PG_CONFIG  - Path to pg_config (default: $(PG_CONFIG))"
 	@echo "  DEBUG      - Enable debug build (DEBUG=1)"
 	@echo "  CC         - C compiler (default: $(CC))"

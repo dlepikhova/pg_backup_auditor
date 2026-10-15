@@ -26,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - CI split into a fast set run on every push (Ubuntu 24.04 + GCC, macOS 14 + Clang, meson build, sanitizers, integration tests) and a full set for pull requests to `main`. The PostgreSQL version axis is dropped from CI: the code includes no PostgreSQL headers and the tests do not use a server.
 - New Makefile targets: `check-all` (Makefile and meson builds plus unit tests) and `test-sanitize`.
-- `pg_config` is now optional for the Makefile build.
+- PostgreSQL is no longer a build dependency: `pg_config` and PostgreSQL include paths are removed from both the Makefile and meson builds. The code never included PostgreSQL headers. Meson setup previously failed on hosts where `pg_config` reports a server include directory that is not installed (for example the GitHub Ubuntu runner).
 
 ## [0.3.1] - 2026-06-22
 
