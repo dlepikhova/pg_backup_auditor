@@ -15,6 +15,19 @@ ifeq ($(COVERAGE),1)
     LDFLAGS_COVERAGE = --coverage
 endif
 
+# Sanitizer support; any UB report fails the run.
+# ASan hangs during runtime init on recent macOS with Apple clang,
+# so macOS defaults to UBSan only; Linux runs ASan + UBSan.
+ifeq ($(shell uname -s),Darwin)
+    SANITIZERS ?= undefined
+else
+    SANITIZERS ?= address,undefined
+endif
+ifeq ($(SANITIZE),1)
+    CFLAGS += -fsanitize=$(SANITIZERS) -fno-sanitize-recover=undefined -fno-omit-frame-pointer
+    LDFLAGS_COVERAGE += -fsanitize=$(SANITIZERS)
+endif
+
 # Libraries
 LDFLAGS = -lcheck -lm -lpthread $(LDFLAGS_COVERAGE)
 
