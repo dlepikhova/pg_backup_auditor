@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `audit` and `stat` treat OK, DONE and WARNING as usable backups. In `audit`, a FULL backup in any other status except RUNNING marks its chain BROKEN.
 - `list --status` accepts the new statuses; `stat` STORAGE lists every status present in the catalog.
 - README exit code table now matches the implementation (code 3 is not used).
+- ROADMAP rewritten around milestones: correctness (v0.4.0), per-cluster foundation (v0.5.0), Barman, more backup tools and parallel checks (v0.6.0), cloud storage (v0.7.0). README links to it instead of keeping its own plan.
 
 ### Infrastructure
 
