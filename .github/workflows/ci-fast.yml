@@ -1,0 +1,75 @@
+name: CI fast
+
+# Quick checks on every push to any branch, so problems show up before a PR
+# is opened. Pull requests from forks get no push event in this repository,
+# so for them the same job runs on pull_request instead.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-fast-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: Fast (${{ matrix.os }}, ${{ matrix.cc }})
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            cc: gcc
+          - os: macos-14
+            cc: clang
+
+    env:
+      CC: ${{ matrix.cc }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # PostgreSQL is not installed: the code includes no PostgreSQL headers
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends check pkg-config meson ninja-build
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: brew install check meson pkgconf
+
+      - name: Build (Makefile)
+        run: make CC=$CC
+
+      - name: Unit tests
+        run: make test-unit CC=$CC
+
+      - name: Integration tests (synthetic pg_probackup catalog)
+        env:
+          PG_BACKUP_AUDITOR_TEST_CATALOG: ${{ runner.temp }}/pg_aud_fixture
+          PG_BACKUP_AUDITOR_TEST_INSTANCE: testinstance
+          PG_BACKUP_AUDITOR_TEST_BACKUP_ID: TB50D5
+        run: |
+          python3 tests/fixtures/create_test_catalog.py "$PG_BACKUP_AUDITOR_TEST_CATALOG"
+          make test-unit CC=$CC
+
+      - name: Build and test (meson)
+        run: |
+          meson setup build/meson
+          meson compile -C build/meson
+          meson test -C build/meson --print-errorlogs
+
+      # Linux: ASan + UBSan; macOS: UBSan only (ASan hangs at init there)
+      - name: Unit tests with sanitizers
+        run: make test-sanitize CC=$CC

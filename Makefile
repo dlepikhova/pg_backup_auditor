@@ -28,8 +28,12 @@ endif
 # Compiler flags
 CFLAGS = -std=c11 -Wall -Wextra -Werror -O2
 CFLAGS += -I./include
-CFLAGS += -I$(shell $(PG_CONFIG) --includedir)
-CFLAGS += -I$(shell $(PG_CONFIG) --includedir-server)
+# PostgreSQL headers are optional: the code does not include them
+PG_INCLUDEDIR := $(shell $(PG_CONFIG) --includedir 2>/dev/null)
+PG_INCLUDEDIR_SERVER := $(shell $(PG_CONFIG) --includedir-server 2>/dev/null)
+ifneq ($(PG_INCLUDEDIR),)
+    CFLAGS += -I$(PG_INCLUDEDIR) -I$(PG_INCLUDEDIR_SERVER)
+endif
 
 # Linker flags
 LDFLAGS = -lm
@@ -129,6 +133,26 @@ test-coverage:
 	@genhtml coverage/coverage.info --output-directory coverage || echo "Warning: genhtml not found, skipping HTML report"
 	@echo "Coverage report generated in coverage/index.html"
 
+# Unit tests with sanitizers (Linux: ASan + UBSan, macOS: UBSan only).
+# Test objects share paths with the main
+# build (src/*.o), so rebuild from clean before and after.
+test-sanitize:
+	@cd tests/unit && $(MAKE) clean && $(MAKE) SANITIZE=1 run
+	@cd tests/unit && $(MAKE) clean
+
+# Meson build directory used by check-all
+MESON_BUILDDIR ?= build/meson-check
+
+# Everything to run before push: both build systems and unit tests
+check-all:
+	$(MAKE) clean
+	$(MAKE)
+	$(MAKE) test
+	@if [ -d $(MESON_BUILDDIR) ]; then meson setup --reconfigure $(MESON_BUILDDIR); \
+	 else meson setup $(MESON_BUILDDIR); fi
+	meson compile -C $(MESON_BUILDDIR)
+	meson test -C $(MESON_BUILDDIR) --print-errorlogs
+
 # Clean tests
 test-clean:
 	@cd tests/unit && $(MAKE) clean
@@ -138,7 +162,7 @@ test-clean:
 -include .depend
 
 # Phony targets
-.PHONY: all install uninstall clean distclean depend test test-unit test-coverage test-clean
+.PHONY: all install uninstall clean distclean depend test test-unit test-coverage test-sanitize check-all test-clean
 
 # Help
 help:
@@ -151,6 +175,9 @@ help:
 	@echo "  clean      - Remove build artifacts"
 	@echo "  distclean  - Remove all generated files"
 	@echo "  depend     - Generate dependencies"
+	@echo "  test       - Run unit tests"
+	@echo "  test-sanitize - Run unit tests with sanitizers (ASan on Linux only)"
+	@echo "  check-all  - Makefile + meson builds and tests (run before push)"
 	@echo "  help       - Show this help"
 	@echo ""
 	@echo "Variables:"

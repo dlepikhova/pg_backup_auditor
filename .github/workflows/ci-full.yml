@@ -1,0 +1,93 @@
+name: CI full
+
+# Full compiler/OS matrix, run before merging into main and after it.
+# The fast set (ci-fast.yml) already covers ubuntu-24.04 + gcc and
+# macos-14 + clang, meson, integration tests and sanitizers.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-full-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Full (${{ matrix.os }}, ${{ matrix.cc }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-22.04 matters: release binaries are built there for glibc reach
+        os: [ubuntu-22.04, ubuntu-24.04]
+        cc: [gcc, clang]
+
+    env:
+      CC: ${{ matrix.cc }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends check pkg-config
+
+      - name: Build
+        run: make CC=$CC
+
+      - name: Unit tests
+        run: make test-unit CC=$CC
+
+  valgrind:
+    name: Valgrind (ubuntu-24.04, gcc)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends check pkg-config valgrind
+
+      - name: Build tests
+        run: cd tests/unit && make CC=gcc
+
+      - name: Memory leak check
+        run: |
+          valgrind --leak-check=full --error-exitcode=1 \
+            --show-leak-kinds=definite,indirect \
+            ./tests/unit/test_runner
+
+  coverage:
+    name: Coverage (ubuntu-24.04, gcc)
+    runs-on: ubuntu-24.04
+    # Report only; never blocks a merge
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends check pkg-config lcov
+
+      - name: Tests with coverage
+        run: make test-coverage CC=gcc
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          if-no-files-found: warn
