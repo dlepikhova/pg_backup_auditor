@@ -1,135 +1,136 @@
 # Roadmap
 
-Where pg_backup_auditor is heading. Organized by direction, not by
-version — so it is clear both what is coming next and what is on the
-horizon. Concrete version assignments (v0.4.0, v0.5.0, …) are tags
-on items, and only the next milestone is firm; later items may be
+Where pg_backup_auditor is heading. Milestones are listed in the order
+they are planned; only the next one is firm, later ones may be
 reordered as feedback lands.
 
 For what has already shipped, see [CHANGELOG.md](CHANGELOG.md).
 
-Legend:
-- **[v0.4.0]** — planned for the next release
-- **[v0.5+]** — planned but not yet scheduled
-- **[future]** — direction, no concrete design yet
-- **size**: S = ~day, M = ~week, L = ~2–3 weeks or more
+Size: S = ~day, M = ~week, L = ~2–3 weeks or more.
 
 ---
 
-## Track 1 — Reach: more backup tools
+## Principles that shape the plan
 
-Broaden coverage beyond the current three adapters (pg_basebackup,
-pg_probackup, pgBackRest) so the tool answers "are my backups OK?"
-regardless of which backup solution a fleet uses.
-
-- **[v0.5+] Barman adapter** — M
-  EnterpriseDB's widely deployed backup tool. Hierarchical layout
-  (`<server>/base/<backup_id>/`), INI-style metadata (`backup.info`,
-  `server.conf`), local disk via rsync. Well-documented format.
-- **[v0.5+] S3 / remote source abstraction** — L
-  Data access layer above local filesystem, so adapters can read
-  from S3, GCS, and other object stores. **Prerequisite for wal-g
-  and for pg_probackup's own S3 backend.**
-- **[v0.5+] wal-g adapter** — L
-  Cloud-native backup tool. Simple `sentinel.json` metadata per
-  backup. Mostly deployed to S3 — depends on the S3 abstraction.
-- **[future] pgmoneta adapter** — L
-  Newer, RH/Fedora ecosystem, TLS-first, Kubernetes-oriented. May
-  need TLS handling and its own protocol support. Strategic bet
-  rather than immediate demand.
-
-## Track 2 — Depth: richer analysis of existing tools
-
-Deeper diagnostics and policy checks on catalogs the tool already
-understands. Turns the auditor from a snapshot into a strategy
-review.
-
-- **[v0.4.0] RPO compliance check** — M
-  `audit --rpo-target=24h`: compare the actual RPO gap (largest
-  window with no valid backup) against a policy target, flag chains
-  that fail.
-- **[v0.4.0] WAL cleanup recommendations** — M
-  In `audit`: identify the oldest WAL segments safe to delete based
-  on the oldest recovery point across all chains. Helps free space
-  without breaking PITR.
-- **[v0.4.0] Backup distribution analysis** — S
-  Detect schedule gaps and irregular intervals. Complements the
-  "average interval" number in `stat` with warnings on outliers.
-- **[v0.4.0] Retention policy validation** — M
-  Check that catalog contents meet a retention requirement (minimum
-  number of backups, minimum age of oldest FULL, and so on).
-- **[v0.5+] Restore-target recommendation** — L
-  Given a target timestamp ("I need to restore to 2026-08-01 14:30"),
-  recommend the specific backup (FULL + incremental chain if any)
-  and the WAL segment range required. Verify chain integrity and
-  WAL continuity from the base backup's stop_lsn up to the target
-  point; if recovery is impossible, report the last reachable
-  recovery point instead. Interface (new command vs. extension of
-  `audit`) TBD. Builds on existing chain and WAL-continuity logic
-  plus a new timestamp → LSN mapping.
-- **[v0.5+] Parallel validation (`-j`)** — L
-  Multi-threaded `check`: validate N backups (or N files within a
-  backup) in parallel. Requires thread pool, coordinated progress
-  reporting, care around shared state.
-- **[v0.5+] JSON / YAML output** — M
-  Structured output for all commands, for integration with
-  monitoring stacks. Requires a small output-layer refactor so
-  every value goes through a formatter.
-
-## Track 3 — Polish: DBA-facing UX
-
-Smaller-but-visible improvements to the day-to-day experience.
-
-- **[v0.4.0] Time-range filters (`--since` / `--before`)** — S
-  For `list`, `audit`, and `stat`. Bound analysis to a window
-  instead of scanning the full catalog. Enables "find the last
-  valid backup before an incident" without manual scrolling.
-- **[v0.4.0] pg_combinebackup full support** — M
-  Parse metadata from `backup_manifest` alone. Currently these
-  backups are listed as ERROR because `backup_label` is absent.
-- **[v0.5+] External WAL archive configuration for pg_basebackup**
-  — S
-  Read WAL archive path from PostgreSQL recovery config or a
-  dedicated settings file, so `check` finds the archive without
-  `--wal-archive`.
-- **[v0.5+] pg_basebackup checkpoint_lsn display** — S
-  Show checkpoint LSN in `info` output.
-- **[v0.5+] Median / stddev in `stat`** — S
-  Add median and standard deviation columns for a more robust
-  distribution picture (mean can hide outliers).
-- **[v0.5+] Professional output formatting** — M
-  Verdict box with colored border, UTF-8 box drawing for section
-  separators, status indicators (✓ / ⚠ / ✗), consistent alignment.
+- **Read-only.** The auditor never writes to a backup catalog, its
+  metadata or its WAL archive. Anything it derives exists only in the
+  output of the current run.
+- **Correct before broad.** A wrong "OK" is worse than no answer. Known
+  correctness gaps are fixed before new features build on top of them.
+- **One cluster at a time.** Backups, WAL archive, timeline history and
+  WAL segment size belong to one PostgreSQL cluster; analysis must never
+  mix data from different clusters.
+- **Say what was not checked.** When a tool, format or storage does not
+  allow a check, the output says so instead of reporting success.
 
 ---
 
-## v0.4.0 focus
+## v0.4.0 — Correctness
 
-The next release is themed **"analysis vs. policy"** — the tool
-already reports the current state; v0.4.0 lets you compare that
-state against explicit policy targets:
+Make the existing analysis trustworthy on real catalogs.
 
-- RPO compliance check
-- WAL cleanup recommendations
-- Retention policy validation
-- Backup distribution analysis
-- Time-range filters
-- pg_combinebackup full support
+Already done (see `Unreleased` in the changelog): all pg_probackup
+statuses recognized, unreadable status/type reported as UNKNOWN,
+pgBackRest page checksum errors detected, `check` exit codes for a
+missing `--backup-id` and for "nothing validated".
 
-## Ideas without a track (yet)
+Remaining:
 
-Things that have come up but need more thought before they belong
-in a track:
+- **Time zones in backup timestamps** — S. Timestamps from
+  `backup_label` and `backup.control` are currently read in the
+  auditing host's time zone, so durations, RPO gap and intervals shift
+  when the server and the host are in different zones.
+- **Recovery points in `audit`** — M. The oldest recovery point is the
+  end of the oldest usable backup, not its start; the latest one
+  requires every ancestor in the chain to be usable; WAL coverage after
+  a backup is checked per timeline and with the real segment size.
+- **Compressed pg_probackup WAL** — M. Segments stored as `.gz` by
+  `archive-push --compress` are currently not seen, which reports
+  segments as missing.
+- **`--no-color`** — S. Accepted by every command; no color codes when
+  output is not a terminal.
+- **WAL cleanup line removed from `audit`** — S. The current estimate
+  can suggest deleting WAL that a backup of another cluster needs. It
+  returns as a recommendation once per-cluster analysis exists (see
+  v0.6.0).
+- **Time-range filters (`--since` / `--before`)** — S. For `list`,
+  `audit` and `stat`: bound analysis to a window, e.g. to find the last
+  valid backup before an incident.
 
-- Prometheus text-format output (`stat --format=prometheus`) — very
-  close to JSON/YAML in scope; may fold into Track 2's output work.
-- Backup-tool-specific config auto-detection (pg_probackup.conf,
-  pgBackRest.conf) — cross-cutting; could inform several adapters.
+## v0.5.0 — Foundation
+
+Groundwork that every new backup tool and the cloud storage depend on.
+
+- **Per-cluster analysis** — L. Backups are grouped by PostgreSQL
+  cluster (system identifier from `pg_control`), each with its own WAL
+  archive, timeline history and segment size. Fixes chain linking and
+  WAL checks on catalogs that hold several instances.
+- **Catalog-level adapters** — M. An adapter describes a whole catalog
+  (instances, backups, WAL) instead of recognizing one directory at a
+  time. Needed for tools whose backups are not plain directories.
+- **Storage access layer** — M. All reads go through one interface
+  (list, stat, read a range). Local filesystem first; it is the
+  prerequisite for S3.
+- **Decompression** — M. gzip, lz4, zstd, bzip2, xz as optional build
+  dependencies, used for WAL and backup files of every tool.
+- **JSON output** — M. Structured output for all commands, for
+  monitoring and automation. Comes with separating analysis from
+  rendering, which also makes the analysis testable.
+
+## v0.6.0 — More tools, faster checks
+
+- **Barman adapter** — M. Local Barman catalogs: `backup.info`, WAL
+  directory, compressed WAL.
+- **More backup tools** — further adapters on the same catalog-level
+  foundation.
+- **Parallel validation (`check -j`)** — L. Files of a backup validated
+  in parallel; a single large FULL backup no longer runs in one thread.
+- **Policy checks in `audit`** — M each. Built on per-cluster analysis:
+  - RPO compliance (`--rpo-target=24h`);
+  - retention requirements (minimum number of backups, age of the
+    oldest FULL);
+  - schedule gaps and irregular intervals;
+  - WAL that no usable backup needs any more.
+
+## v0.7.0 — Cloud storage
+
+- **S3 storage backend** — L. Read-only: list, stat, ranged reads.
+  Credentials from environment and profile. On S3 the default check
+  level covers metadata and WAL; per-file checksums (which download the
+  whole backup) are opt-in.
+- **wal-g adapter** — L. Metadata, delta chains, compressed WAL.
+  Encrypted backups: metadata only, content reported as not checked.
+- **barman-cloud adapter** — M.
+- **S3 repositories of pgBackRest and pg_probackup** — M.
+
+## Later
+
+Directions without a version yet.
+
+- **Restore-target recommendation** — given a target time, the backup
+  (with its chain) and WAL range needed to reach it, or the last
+  reachable point if it cannot be reached.
+- **Check journal** — optional history of `check` results kept at a
+  path the user chooses, never inside or next to the backup catalog.
+  Shows files, backups and WAL segments that appeared or disappeared
+  since the previous check, and lets unchanged backups skip repeated
+  checksum validation.
+- **Prometheus text format** (`stat --format=prometheus`).
+- **pgmoneta adapter.**
+- **pg_combinebackup** — metadata from `backup_manifest` alone.
+- **pgBackRest WAL archive** — hash-suffixed, compressed segment files.
+
+## Not planned
+
+- Writing to backup catalogs: changing statuses, deleting or repairing
+  backups. Status changes stay with the backup tool itself
+  (`pg_probackup validate`, `pgbackrest check`).
+- Running restores to test backups.
+- Restore time estimation: depends on hardware the auditor cannot see.
 
 ---
 
 ## How to influence the roadmap
 
 Open a GitHub issue with the use case — real DBA scenarios reorder
-priorities faster than anything else. Items in **[v0.5+]** and
-**[future]** are the most flexible.
+priorities faster than anything else.
