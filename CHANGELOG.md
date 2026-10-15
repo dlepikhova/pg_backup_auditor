@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - A backup whose status or type cannot be read from tool metadata is now reported as UNKNOWN and flagged by `check`, instead of being treated as an OK FULL backup.
 - `check --backup-id` with an ID that does not exist now fails with `Backup not found` and exit code 1 instead of reporting `Result: OK`.
 - `check` now exits with code 2 when no backup was eligible for validation (previously 0).
+- Meson build from a clean clone failed at `meson setup`: `meson.build` installed `docs/DEVELOPER.md`, which is not part of the repository.
 - pgBackRest backups with page checksum errors are now detected. The flag is read from `"backup-error":true` in `backup.info`, where pgBackRest records it; the previous check looked for a `backup-error=y` line in `backup.manifest`, which pgBackRest never writes. Such backups are shown as WARNING and reported as an error by `check`.
 
 ### Changed
