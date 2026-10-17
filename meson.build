@@ -103,7 +103,7 @@ if yaml_dep.found()
 endif
 
 # Main executable
-executable('pg_backup_auditor',
+auditor_exe = executable('pg_backup_auditor',
   sources,
   include_directories: inc_dirs,
   c_args: c_args,
