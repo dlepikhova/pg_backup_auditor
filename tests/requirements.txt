@@ -1,0 +1,2 @@
+# Python packages for the CLI tests (tests/cli); not needed to build
+pytest>=7.4

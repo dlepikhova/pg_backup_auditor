@@ -38,8 +38,9 @@ builddir/
 .DS_Store
 
 # Test artifacts
-tests/integration/.pytest_cache/
-tests/integration/__pycache__/
+__pycache__/
+.pytest_cache/
+.venv/
 *.pyc
 .coverage
 htmlcov/
