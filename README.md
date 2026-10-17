@@ -372,6 +372,10 @@ make check-all
 # Unit tests only
 make test
 
+# CLI tests against the built binary (needs Python 3 + pytest)
+python3 -m venv .venv && .venv/bin/pip install -r tests/requirements.txt
+make test-cli PYTHON=.venv/bin/python
+
 # Unit tests with sanitizers (ASan + UBSan on Linux, UBSan on macOS)
 make test-sanitize
 ```
@@ -379,7 +383,7 @@ make test-sanitize
 **273 unit tests, 100% passing.**
 
 CI runs in two sets:
-- **Fast** (`ci-fast.yml`, every push to any branch): Ubuntu 24.04 + GCC and macOS 14 + Clang; Makefile and meson builds, unit and integration tests, sanitizers.
+- **Fast** (`ci-fast.yml`, every push to any branch): Ubuntu 24.04 + GCC and macOS 14 + Clang; Makefile and meson builds, CLI, unit and integration tests, sanitizers.
 - **Full** (`ci-full.yml`, pull requests to `main` and pushes to `main`): Ubuntu 22.04/24.04 with GCC and Clang, Valgrind leak check, coverage report.
 
 Test suite covers: WAL validator (availability, continuity, restore chain, headers, CRC32C, segment size, stream WAL), backup validator (structure, metadata, checksums for all three tools, chain validation), adapters (pg_basebackup, pg_probackup, pgBackRest — scan, metadata, WAL path), common utilities (string_utils, xlog, INI parser, fs_scanner).

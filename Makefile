@@ -123,6 +123,11 @@ test-coverage:
 	@genhtml coverage/coverage.info --output-directory coverage || echo "Warning: genhtml not found, skipping HTML report"
 	@echo "Coverage report generated in coverage/index.html"
 
+# CLI tests (pytest) against the built binary
+PYTHON ?= python3
+test-cli: all
+	PG_BACKUP_AUDITOR=$(CURDIR)/$(TARGET) $(PYTHON) -m pytest -p no:cacheprovider tests/cli
+
 # Unit tests with sanitizers (Linux: ASan + UBSan, macOS: UBSan only).
 # Test objects share paths with the main
 # build (src/*.o), so rebuild from clean before and after.
@@ -137,6 +142,7 @@ MESON_BUILDDIR ?= build/meson-check
 check-all:
 	$(MAKE) clean
 	$(MAKE)
+	$(MAKE) test-cli
 	$(MAKE) test
 	@if [ -d $(MESON_BUILDDIR) ]; then meson setup --reconfigure $(MESON_BUILDDIR); \
 	 else meson setup $(MESON_BUILDDIR); fi
@@ -152,7 +158,7 @@ test-clean:
 -include .depend
 
 # Phony targets
-.PHONY: all install uninstall clean distclean depend test test-unit test-coverage test-sanitize check-all test-clean
+.PHONY: all install uninstall clean distclean depend test test-unit test-coverage test-cli test-sanitize check-all test-clean
 
 # Help
 help:
@@ -166,6 +172,7 @@ help:
 	@echo "  distclean  - Remove all generated files"
 	@echo "  depend     - Generate dependencies"
 	@echo "  test       - Run unit tests"
+	@echo "  test-cli   - Run CLI tests (needs Python 3 + pytest)"
 	@echo "  test-sanitize - Run unit tests with sanitizers (ASan on Linux only)"
 	@echo "  check-all  - Makefile + meson builds and tests (run before push)"
 	@echo "  help       - Show this help"

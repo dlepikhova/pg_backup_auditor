@@ -47,6 +47,17 @@ sudo pkg install gmake
 sudo pkg install check
 ```
 
+### Tests (optional)
+
+- Unit tests: libcheck (see the platform sections above).
+- CLI tests: Python 3 and pytest. System Python is often externally managed, so use a virtual environment:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r tests/requirements.txt
+make test-cli PYTHON=.venv/bin/python
+```
+
 ## Building from Source
 
 ### Standard Build

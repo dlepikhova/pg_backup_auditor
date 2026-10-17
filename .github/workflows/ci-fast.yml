@@ -49,8 +49,20 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: 1
         run: brew install check meson pkgconf
 
+      # pytest for the CLI tests, in a venv: system Python is externally managed
+      - name: Set up Python test environment
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet -r tests/requirements.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
       - name: Build (Makefile)
         run: make CC=$CC
+
+      # Before the unit tests: tests/unit reuses src/*.o paths with its own
+      # flags, so the binary is tested as built by the main Makefile
+      - name: CLI tests
+        run: make test-cli CC=$CC
 
       - name: Unit tests
         run: make test-unit CC=$CC
