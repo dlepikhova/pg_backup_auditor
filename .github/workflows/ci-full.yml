@@ -2,7 +2,7 @@ name: CI full
 
 # Full compiler/OS matrix, run before merging into main and after it.
 # The fast set (ci-fast.yml) already covers ubuntu-24.04 + gcc and
-# macos-14 + clang, meson, integration tests and sanitizers.
+# macOS + clang, meson, integration tests and sanitizers.
 
 on:
   pull_request:
