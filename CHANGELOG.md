@@ -24,6 +24,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - README exit code table now matches the implementation (code 3 is not used).
 - ROADMAP rewritten around milestones: correctness (v0.4.0), per-cluster foundation (v0.5.0), Barman, more backup tools and parallel checks (v0.6.0), cloud storage (v0.7.0). README links to it instead of keeping its own plan.
 
+### Removed
+
+- `audit` no longer prints the `Cleanup: ... of WAL segments can be safely removed` line. The estimate compared LSNs across clusters and timelines, counted every segment as 16 MB and could include the segment a backup starts in, so following it could delete WAL needed for restore. WAL cleanup advice will return once WAL is analyzed per cluster.
+
 ### Infrastructure
 
 - CI split into a fast set run on every push (Ubuntu 24.04 + GCC, macOS + Clang, meson build, sanitizers, integration tests) and a full set for pull requests to `main`. The PostgreSQL version axis is dropped from CI: the code includes no PostgreSQL headers and the tests do not use a server.

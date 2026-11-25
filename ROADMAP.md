@@ -32,7 +32,11 @@ Make the existing analysis trustworthy on real catalogs.
 Already done (see `Unreleased` in the changelog): all pg_probackup
 statuses recognized, unreadable status/type reported as UNKNOWN,
 pgBackRest page checksum errors detected, `check` exit codes for a
-missing `--backup-id` and for "nothing validated".
+missing `--backup-id` and for "nothing validated", `--no-color`
+accepted by every command with no color codes outside a terminal, the
+WAL cleanup line removed from `audit` (its estimate could suggest
+deleting WAL a backup still needs; it returns as a policy check in
+v0.6.0).
 
 Remaining:
 
@@ -47,12 +51,6 @@ Remaining:
 - **Compressed pg_probackup WAL** — M. Segments stored as `.gz` by
   `archive-push --compress` are currently not seen, which reports
   segments as missing.
-- **`--no-color`** — S. Accepted by every command; no color codes when
-  output is not a terminal.
-- **WAL cleanup line removed from `audit`** — S. The current estimate
-  can suggest deleting WAL that a backup of another cluster needs. It
-  returns as a recommendation once per-cluster analysis exists (see
-  v0.6.0).
 - **Time-range filters (`--since` / `--before`)** — S. For `list`,
   `audit` and `stat`: bound analysis to a window, e.g. to find the last
   valid backup before an incident.
