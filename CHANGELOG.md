@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - A backup whose status or type cannot be read from tool metadata is now reported as UNKNOWN and flagged by `check`, instead of being treated as an OK FULL backup.
 - `check --backup-id` with an ID that does not exist now fails with `Backup not found` and exit code 1 instead of reporting `Result: OK`.
 - `check` now exits with code 2 when no backup was eligible for validation (previously 0).
+- `--no-color` was rejected by every command (exit code 4). It is now accepted anywhere on the command line, and colors are off automatically when output is not a terminal, so scripts no longer receive escape codes.
 - Meson build from a clean clone failed at `meson setup`: `meson.build` installed `docs/DEVELOPER.md`, which is not part of the repository.
 - pgBackRest backups with page checksum errors are now detected. The flag is read from `"backup-error":true` in `backup.info`, where pgBackRest records it; the previous check looked for a `backup-error=y` line in `backup.manifest`, which pgBackRest never writes. Such backups are shown as WARNING and reported as an error by `check`.
 
@@ -25,7 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Infrastructure
 
-- CI split into a fast set run on every push (Ubuntu 24.04 + GCC, macOS 14 + Clang, meson build, sanitizers, integration tests) and a full set for pull requests to `main`. The PostgreSQL version axis is dropped from CI: the code includes no PostgreSQL headers and the tests do not use a server.
+- CI split into a fast set run on every push (Ubuntu 24.04 + GCC, macOS + Clang, meson build, sanitizers, integration tests) and a full set for pull requests to `main`. The PostgreSQL version axis is dropped from CI: the code includes no PostgreSQL headers and the tests do not use a server.
+- macOS CI and release builds moved from the retired `macos-14` runner image to `macos-26`. Release binaries keep macOS 14 as the minimum version.
 - New Makefile targets: `check-all` (Makefile and meson builds plus unit tests) and `test-sanitize`.
 - CLI tests (pytest, `tests/cli`) run the built binary and check exit codes and messages; `make test-cli`, a `cli` test in meson, and a step in the fast CI set. Python and pytest are needed only for these tests.
 - PostgreSQL is no longer a build dependency: `pg_config` and PostgreSQL include paths are removed from both the Makefile and meson builds. The code never included PostgreSQL headers. Meson setup previously failed on hosts where `pg_config` reports a server include directory that is not installed (for example the GitHub Ubuntu runner).

@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* Command handlers */
 extern int cmd_list_main(int argc, char **argv);
@@ -48,14 +49,26 @@ main(int argc, char **argv)
 	/* Initialize */
 	pg_backup_auditor_init();
 
-	/* Check for --no-color option anywhere in arguments */
-	for (int i = 1; i < argc; i++)
+	/* No colors when stdout is not a terminal (pipe, file, monitoring) */
+	if (!isatty(STDOUT_FILENO))
+		use_color = false;
+
+	/*
+	 * --no-color is global and may appear anywhere; remove it from argv so
+	 * the command's own option parser does not reject it.
+	 */
 	{
-		if (strcmp(argv[i], "--no-color") == 0)
+		int j = 1;
+
+		for (int i = 1; i < argc; i++)
 		{
-			use_color = false;
-			break;
+			if (strcmp(argv[i], "--no-color") == 0)
+				use_color = false;
+			else
+				argv[j++] = argv[i];
 		}
+		argc = j;
+		argv[argc] = NULL;
 	}
 
 	/* Check for arguments */
