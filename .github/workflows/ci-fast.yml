@@ -16,17 +16,22 @@ concurrency:
 
 jobs:
   fast:
-    name: Fast (${{ matrix.os }}, ${{ matrix.cc }})
+    name: Fast (${{ matrix.label }}, ${{ matrix.cc }})
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
       matrix:
+        # label goes into the job name, which is a required status check;
+        # the macOS label has no version so a runner image bump does not
+        # change the check name
         include:
           - os: ubuntu-24.04
+            label: ubuntu-24.04
             cc: gcc
-          - os: macos-14
+          - os: macos-26
+            label: macos
             cc: clang
 
     env:
