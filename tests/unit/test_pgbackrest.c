@@ -877,6 +877,45 @@ START_TEST(test_pbr_checksums_mismatch)
 }
 END_TEST
 
+/* Checksum value longer than SHA1 hex → error, not truncated */
+START_TEST(test_pbr_checksums_too_long)
+{
+	char dir[PATH_MAX], path[PATH_MAX];
+	TEST_SNPRINTF(dir, "/tmp/pbr_ck_long_%d", getpid());
+	mkdir(dir, 0755);
+
+	TEST_SNPRINTF(path, "%s/pg_data", dir);
+	mkdir(path, 0755);
+
+	TEST_SNPRINTF(path, "%s/pg_data/PG_VERSION", dir);
+	FILE *fp = fopen(path, "w");
+	fputs("17\n", fp);
+	fclose(fp);
+
+	TEST_SNPRINTF(path, "%s/backup.manifest", dir);
+	fp = fopen(path, "w");
+	fprintf(fp, "[backup]\nbackup-label=test\n\n");
+	fprintf(fp, "[target:file]\n");
+	fprintf(fp, "pg_data/PG_VERSION={\"checksum\":\"%s\",\"size\":3}\n",
+			"00000000000000000000000000000000000000000000000000");
+	fclose(fp);
+
+	BackupInfo *bi = make_pgbackrest_backup_info(dir);
+	ValidationResult *r = pgbackrest_check_manifest_checksums(bi);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert_ptr_nonnull(strstr(r->errors[0], "Invalid checksum"));
+	ck_assert_int_eq(r->status, BACKUP_STATUS_ERROR);
+
+	free_validation_result(r);
+	free(bi);
+	char cmd[PATH_MAX + 20];
+	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
+	TEST_SYSTEM(cmd);
+}
+END_TEST
+
 /* Missing file listed in manifest → error */
 START_TEST(test_pbr_checksums_missing_file)
 {
@@ -1093,6 +1132,7 @@ pgbackrest_suite(void)
 	tcase_add_test(tc_checksums, test_pbr_checksums_compressed);
 	tcase_add_test(tc_checksums, test_pbr_checksums_all_ok);
 	tcase_add_test(tc_checksums, test_pbr_checksums_mismatch);
+	tcase_add_test(tc_checksums, test_pbr_checksums_too_long);
 	tcase_add_test(tc_checksums, test_pbr_checksums_missing_file);
 	suite_add_tcase(s, tc_checksums);
 
