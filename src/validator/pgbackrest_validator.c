@@ -205,13 +205,13 @@ pgbackrest_validate_structure(BackupInfo *backup)
  * ------------------------------------------------------------------ */
 
 /*
- * Extract a JSON string value: {"checksum":"<value>",...}
- * Returns pointer into a static buffer, or NULL if not found.
+ * Extract a JSON string value: {"checksum":"<value>",...} into out.
+ * Returns the value length (out is not written if it does not fit,
+ * i.e. length >= outsz), or -1 if the key is not found.
  */
-static const char *
-extract_json_str(const char *json, const char *key)
+static int
+extract_json_str(const char *json, const char *key, char *out, size_t outsz)
 {
-	static char buf[256];
 	char        search[64];
 	const char *p, *q;
 	size_t      len;
@@ -219,19 +219,20 @@ extract_json_str(const char *json, const char *key)
 	snprintf(search, sizeof(search), "\"%s\":\"", key);
 	p = strstr(json, search);
 	if (p == NULL)
-		return NULL;
+		return -1;
 
 	p += strlen(search);
 	q  = strchr(p, '"');
 	if (q == NULL)
-		return NULL;
+		return -1;
 
 	len = (size_t)(q - p);
-	if (len >= sizeof(buf))
-		len = sizeof(buf) - 1;
-	memcpy(buf, p, len);
-	buf[len] = '\0';
-	return buf;
+	if (len < outsz)
+	{
+		memcpy(out, p, len);
+		out[len] = '\0';
+	}
+	return (int)len;
 }
 
 /*
@@ -347,7 +348,8 @@ pgbackrest_check_manifest_checksums(BackupInfo *backup)
 	{
 		const char *rel_path  = kv->key;   /* e.g. "pg_data/PG_VERSION" */
 		const char *json      = kv->value;
-		const char *checksum;
+		char        checksum[41];
+		int         checksum_len;
 		char        file_path[PATH_MAX];
 		char        actual[41];
 
@@ -356,9 +358,17 @@ pgbackrest_check_manifest_checksums(BackupInfo *backup)
 			strcmp(rel_path,  "pg_data/pg_wal")  == 0)
 			continue;
 
-		checksum = extract_json_str(json, "checksum");
-		if (checksum == NULL)
+		checksum_len = extract_json_str(json, "checksum",
+										checksum, sizeof(checksum));
+		if (checksum_len < 0)
 			continue;   /* no checksum field: zero-size or page-checksum file */
+		if ((size_t) checksum_len >= sizeof(checksum))
+		{
+			snprintf(msg, sizeof(msg),
+					 "Invalid checksum in backup.manifest: %s", rel_path);
+			add_error(result, msg);
+			continue;
+		}
 
 		path_join(file_path, sizeof(file_path),
 				  backup->backup_path, rel_path);
