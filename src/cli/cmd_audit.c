@@ -420,30 +420,6 @@ get_latest_wal_lsn(const WALArchiveInfo *wal_info, XLogRecPtr after_lsn,
 	return false;
 }
 
-/* Calculate how many WAL segments can be safely removed (older than oldest backup) */
-static uint64_t
-calculate_deletable_wal_size(const WALArchiveInfo *wal_info, XLogRecPtr oldest_lsn)
-{
-	if (wal_info == NULL || wal_info->segment_count == 0)
-		return 0;
-
-	uint64_t deletable_size = 0;
-
-	/* All segments before oldest_lsn can be deleted */
-	for (int i = 0; i < wal_info->segment_count; i++)
-	{
-		WALSegmentName *seg = &wal_info->segments[i];
-		XLogRecPtr seg_lsn = ((XLogRecPtr)seg->log_id << 32) | (seg->seg_id * 16 * 1024 * 1024);
-
-		if (seg_lsn < oldest_lsn)
-		{
-			deletable_size += 16 * 1024 * 1024;  /* 16 MB per segment */
-		}
-	}
-
-	return deletable_size;
-}
-
 /* Check if WAL archive covers from backup stop_lsn to the latest segment */
 static bool
 is_wal_continuous_after_lsn(const WALArchiveInfo *wal_info, XLogRecPtr from_lsn)
@@ -782,32 +758,6 @@ print_wal_section(const char *wal_archive_dir, WALArchiveInfo *wal_info,
 				   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
 		}
 		free_validation_result(chain_result);
-	}
-
-	/* WAL cleanup recommendations */
-	if (backups != NULL && wal_info->segment_count > 0)
-	{
-		/* Find oldest backup's start_lsn to calculate cleanable segments */
-		XLogRecPtr oldest_lsn = 0;
-		for (BackupInfo *b = backups; b != NULL; b = b->next)
-		{
-			if (b->start_lsn > 0)
-			{
-				if (oldest_lsn == 0 || b->start_lsn < oldest_lsn)
-					oldest_lsn = b->start_lsn;
-			}
-		}
-
-		if (oldest_lsn > 0)
-		{
-			uint64_t deletable_size = calculate_deletable_wal_size(wal_info, oldest_lsn);
-			if (deletable_size > 0)
-			{
-				format_bytes(deletable_size, size_str, sizeof(size_str));
-				printf("  Cleanup:    %s of WAL segments can be safely removed (older than oldest backup)\n",
-					   size_str);
-			}
-		}
 	}
 
 	return wal_ok;

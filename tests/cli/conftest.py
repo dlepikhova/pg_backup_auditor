@@ -51,10 +51,17 @@ def probackup_catalog(tmp_path):
     Each backup is (backup_id, mode, status) or a dict with extra
     backup.control keys, e.g. {"id": "B", "mode": "PAGE", "status": "OK",
     "parent-backup-id": "A"}.
+
+    wal lists segment file names to create (1 KB each) in wal/<instance>/.
     """
 
-    def build(*backups, instance="node1"):
+    def build(*backups, instance="node1", wal=()):
         root = tmp_path / "catalog"
+        if wal:
+            wal_dir = root / "wal" / instance
+            wal_dir.mkdir(parents=True)
+            for name in wal:
+                (wal_dir / name).write_bytes(bytes(1024))
         for spec in backups:
             if isinstance(spec, tuple):
                 spec = {"id": spec[0], "mode": spec[1], "status": spec[2]}
