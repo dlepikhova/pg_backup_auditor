@@ -38,6 +38,9 @@ print_general_usage(void)
 	printf("  audit   - Audit backup strategy (recovery points, RPO, storage)\n");
 	printf("  stat    - Backup collection statistics\n");
 	printf("  help    - Show this help message\n\n");
+	printf("GLOBAL OPTIONS:\n");
+	printf("  --no-color   Disable colored output (also off when output is not a terminal)\n");
+	printf("  --version    Show version\n\n");
 	printf("Use 'pg_backup_auditor COMMAND --help' for command-specific options.\n\n");
 }
 

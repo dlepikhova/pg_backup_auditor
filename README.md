@@ -27,7 +27,7 @@
 - **Chain validation**: pg_probackup (FULL/DELTA/PAGE/PTRACK) and pgBackRest (FULL/DIFF/INCR)
 - **STREAM backup WAL**: embedded `database/pg_wal/` and `pg_wal/` scanned automatically
 - **WAL segment size** auto-detected from segment headers (1 MB – 1 GB)
-- Color output with `--no-color`
+- Colored output in a terminal; plain text when output goes to a pipe or file, or with `--no-color` (accepted anywhere on the command line)
 
 ## Quick Start
 
@@ -383,7 +383,7 @@ make test-sanitize
 **273 unit tests, 100% passing.**
 
 CI runs in two sets:
-- **Fast** (`ci-fast.yml`, every push to any branch): Ubuntu 24.04 + GCC and macOS 14 + Clang; Makefile and meson builds, CLI, unit and integration tests, sanitizers.
+- **Fast** (`ci-fast.yml`, every push to any branch): Ubuntu 24.04 + GCC and macOS + Clang; Makefile and meson builds, CLI, unit and integration tests, sanitizers.
 - **Full** (`ci-full.yml`, pull requests to `main` and pushes to `main`): Ubuntu 22.04/24.04 with GCC and Clang, Valgrind leak check, coverage report.
 
 Test suite covers: WAL validator (availability, continuity, restore chain, headers, CRC32C, segment size, stream WAL), backup validator (structure, metadata, checksums for all three tools, chain validation), adapters (pg_basebackup, pg_probackup, pgBackRest — scan, metadata, WAL path), common utilities (string_utils, xlog, INI parser, fs_scanner).
