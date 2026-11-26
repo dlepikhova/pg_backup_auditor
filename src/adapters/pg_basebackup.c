@@ -899,16 +899,18 @@ parse_manifest_stream(FILE *fp, BackupInfo *info)
 	/* For pg_combinebackup (no backup_label): generate synthetic backup_id */
 	if (info->start_time == 0)
 	{
+		struct tm tm_now;
+
 		now = time(NULL);
-		struct tm *tm_now = localtime(&now);
+		localtime_r(&now, &tm_now);
 		snprintf(info->backup_id, sizeof(info->backup_id),
 				 "%04d%02d%02d-%02d%02d%02d",
-				 tm_now->tm_year + 1900,
-				 tm_now->tm_mon + 1,
-				 tm_now->tm_mday,
-				 tm_now->tm_hour,
-				 tm_now->tm_min,
-				 tm_now->tm_sec);
+				 tm_now.tm_year + 1900,
+				 tm_now.tm_mon + 1,
+				 tm_now.tm_mday,
+				 tm_now.tm_hour,
+				 tm_now.tm_min,
+				 tm_now.tm_sec);
 		info->start_time = now;
 	}
 

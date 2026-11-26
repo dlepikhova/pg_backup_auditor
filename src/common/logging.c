@@ -19,6 +19,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#define _POSIX_C_SOURCE 200809L
 
 #include "pg_backup_auditor.h"
 #include <stdio.h>
@@ -74,7 +75,7 @@ log_message(LogLevel level, const char *fmt, va_list args)
 {
 	const char *level_str;
 	time_t now;
-	struct tm *tm_info;
+	struct tm tm_info;
 	char time_buf[64];
 
 	if (level < current_log_level)
@@ -103,12 +104,15 @@ log_message(LogLevel level, const char *fmt, va_list args)
 			break;
 	}
 
+	/* One line per call: other threads cannot interleave inside it */
+	flockfile(log_file);
+
 	/* Timestamp if logging to file */
 	if (log_file != stderr)
 	{
 		time(&now);
-		tm_info = localtime(&now);
-		strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", tm_info);
+		localtime_r(&now, &tm_info);
+		strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M:%S", &tm_info);
 		fprintf(log_file, "[%s] ", time_buf);
 	}
 
@@ -116,6 +120,8 @@ log_message(LogLevel level, const char *fmt, va_list args)
 	vfprintf(log_file, fmt, args);
 	fprintf(log_file, "\n");
 	fflush(log_file);
+
+	funlockfile(log_file);
 }
 
 /*
