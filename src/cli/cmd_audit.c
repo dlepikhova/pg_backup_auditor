@@ -741,7 +741,8 @@ print_wal_section(const char *wal_archive_dir, WALArchiveInfo *wal_info,
 	printf("  Size:       %s\n", size_str);
 
 	/* WAL restore chain coverage */
-	ValidationResult *chain_result = check_wal_restore_chain(backups, wal_info);
+	WalRestoreChainInfo chain;
+	ValidationResult *chain_result = check_wal_restore_chain(backups, wal_info, &chain);
 	if (chain_result != NULL)
 	{
 		if (chain_result->error_count > 0)
@@ -752,10 +753,20 @@ print_wal_section(const char *wal_archive_dir, WALArchiveInfo *wal_info,
 				printf("              %s\n", chain_result->errors[i]);
 			wal_ok = false;
 		}
+		else if (chain.backup_count < 2)
+		{
+			printf("  Coverage:   %s[NOT CHECKED]%s needs at least 2 completed backups "
+				   "(OK, DONE or WARNING), found %d%s%s\n",
+				   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "",
+				   chain.backup_count,
+				   chain.first != NULL ? ": " : "",
+				   chain.first != NULL ? chain.first->backup_id : "");
+		}
 		else
 		{
-			printf("  Coverage:   %s[OK]%s Continuous WAL available for all backups\n",
-				   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
+			printf("  Coverage:   %s[OK]%s no WAL gaps between %s and %s (%d completed backups)\n",
+				   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "",
+				   chain.first->backup_id, chain.last->backup_id, chain.backup_count);
 		}
 		free_validation_result(chain_result);
 	}

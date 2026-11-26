@@ -258,7 +258,7 @@ pg_backup_auditor audit --backup-dir=PATH [OPTIONS]
 | **CHAINS** | Per-chain analysis: status (OK/WARNING/ERROR), WAL mode (stream/archive/mixed), oldest/latest recovery point, RPO gap between backups |
 | **Orphaned** | Incremental/differential backups without a parent FULL backup — these cannot be used for recovery |
 | **Anomalies** | Backups with unusual patterns (size, duration). Size >2x average always reported; size <0.5x average only with `--detect-size-small` |
-| **WAL** | Archive statistics (requires `--wal-archive`): total segments, size, continuity, coverage for backup recovery ranges |
+| **WAL** | Archive statistics (requires `--wal-archive`): total segments, size, and whether WAL is present between consecutive completed backups (OK, DONE or WARNING). With fewer than two such backups the coverage is reported as NOT CHECKED |
 | **STORAGE** | Capacity summary: total backup size, disk usage, in-progress RUNNING backups |
 | **Verdict** | Overall assessment: **OK** (healthy chains, good coverage), **WARNING** (RPO gaps exist), or **CRITICAL** (missing backups, WAL gaps) |
 
@@ -357,6 +357,7 @@ pg_basebackup and pg_probackup adapters work with the PostgreSQL version that cr
 - **pg_combinebackup (PG17+)**: backups produced by `pg_combinebackup` have `backup_manifest` but no `backup_label`. Metadata parsing from `backup_manifest` is not yet implemented; these backups are listed with status ERROR.
 - **`node_name`**: always reported as `localhost` for pg_basebackup backups. Extraction from the backup directory name or connection metadata is not yet implemented.
 - **pg_probackup custom WAL location**: if `pg_probackup.conf` specifies a non-default WAL archive path, it is ignored. WAL validation always looks in the default location relative to the catalog.
+- **Several instances in one catalog**: backups of all instances are ordered into one LSN sequence for the WAL check between backups, and one WAL archive is used for all of them. On a catalog with several instances or clusters the result may compare backups of different instances. Per-cluster analysis is planned (see [ROADMAP.md](ROADMAP.md)).
 - **pg_probackup tablespace and database map**: entries in `tablespace_map` and `database_map` are not verified against the actual backup file tree.
 
 ## Roadmap

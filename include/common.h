@@ -113,6 +113,14 @@ ValidationResult* check_wal_availability(BackupInfo *backup, WALArchiveInfo *wal
 ValidationResult* check_wal_headers(BackupInfo *backup, WALArchiveInfo *wal_info);
 ValidationResult* check_wal_timeline(BackupInfo *backup, WALArchiveInfo *wal_info);
 ValidationResult* check_wal_archive_headers(WALArchiveInfo *wal_info);
-ValidationResult* check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info);
+/* Backups taken into check_wal_restore_chain (usable, with start and stop LSN) */
+typedef struct {
+	int               backup_count;
+	const BackupInfo *first;    /* lowest (timeline, stop_lsn) */
+	const BackupInfo *last;     /* highest (timeline, stop_lsn) */
+} WalRestoreChainInfo;
+
+ValidationResult* check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info,
+										  WalRestoreChainInfo *info);
 
 #endif /* COMMON_H */

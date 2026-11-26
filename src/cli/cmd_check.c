@@ -459,7 +459,8 @@ cmd_check_main(int argc, char **argv)
 			}
 		}
 
-		ValidationResult *chain_result = check_wal_restore_chain(backups, wal_info);
+		WalRestoreChainInfo chain;
+		ValidationResult *chain_result = check_wal_restore_chain(backups, wal_info, &chain);
 		if (chain_result != NULL)
 		{
 			if (chain_result->error_count > 0)
@@ -469,15 +470,26 @@ cmd_check_main(int argc, char **argv)
 				for (int i = 0; i < chain_result->error_count; i++)
 					printf("          %s\n", chain_result->errors[i]);
 				if (chain_has_stream)
-					printf("  %s[NOTE]%s Chain contains stream backups — bridge segments "
-						   "between backups are not stored in stream mode and will not "
-						   "appear in the WAL archive\n",
+					printf("  %s[NOTE]%s Chain contains stream backups — WAL stored inside "
+						   "a stream backup restores only that backup; recovery past it "
+						   "replays WAL from the archive, so these segments must be there\n",
 						   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "");
+			}
+			else if (chain.backup_count < 2)
+			{
+				printf("  %s[NOT CHECKED]%s WAL restore chain: needs at least 2 completed "
+					   "backups (OK, DONE or WARNING), found %d%s%s\n",
+					   use_color ? COLOR_YELLOW : "", use_color ? COLOR_RESET : "",
+					   chain.backup_count,
+					   chain.first != NULL ? ": " : "",
+					   chain.first != NULL ? chain.first->backup_id : "");
 			}
 			else
 			{
-				printf("  %s[OK]%s WAL restore chain: all inter-backup bridges complete\n",
-					   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "");
+				printf("  %s[OK]%s WAL restore chain: no WAL gaps between %s and %s "
+					   "(%d completed backups)\n",
+					   use_color ? COLOR_GREEN : "", use_color ? COLOR_RESET : "",
+					   chain.first->backup_id, chain.last->backup_id, chain.backup_count);
 			}
 			total_errors += chain_result->error_count;
 			free_validation_result(chain_result);

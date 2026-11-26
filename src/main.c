@@ -92,6 +92,32 @@ main(int argc, char **argv)
 		goto cleanup;
 	}
 
+	/* help [COMMAND] */
+	if (strcmp(argv[1], "help") == 0)
+	{
+		const char *topic = argc > 2 ? argv[2] : NULL;
+
+		if (topic == NULL)
+			print_general_usage();
+		else if (strcmp(topic, "list") == 0)
+			print_list_usage();
+		else if (strcmp(topic, "check") == 0)
+			print_check_usage();
+		else if (strcmp(topic, "info") == 0)
+			print_info_usage();
+		else if (strcmp(topic, "audit") == 0)
+			print_audit_usage();
+		else if (strcmp(topic, "stat") == 0)
+			print_stat_usage();
+		else
+		{
+			fprintf(stderr, "Error: Unknown command '%s'\n\n", topic);
+			print_general_usage();
+			ret = EXIT_INVALID_ARGUMENTS;
+		}
+		goto cleanup;
+	}
+
 	/* Dispatch to command handlers */
 	if (strcmp(argv[1], "list") == 0)
 	{
