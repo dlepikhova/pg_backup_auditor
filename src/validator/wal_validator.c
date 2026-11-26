@@ -1199,9 +1199,23 @@ compare_backup_by_lsn(const void *a, const void *b)
  * If bridge_start >= bridge_end the backups are adjacent or overlapping and no
  * bridge check is needed.
  *
+ * The own range of every backup except the first and the last is checked too,
+ * so WAL is checked without holes from the first backup's stop to the last
+ * backup's start.
+ *
+ * If info is not NULL, it receives the number of backups taken into the check
+ * and the first and last of them; fewer than 2 means nothing was checked.
  */
+static bool
+chain_eligible(const BackupInfo *b)
+{
+	return backup_status_is_usable(b->status) &&
+		   b->start_lsn > 0 && b->stop_lsn > 0;
+}
+
 ValidationResult*
-check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
+check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info,
+						WalRestoreChainInfo *info)
 {
 	ValidationResult   *result;
 	BackupInfo        **arr;
@@ -1210,6 +1224,9 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
 	char				msg[512];
 	char				lsn_a[32], lsn_b[32];
 	uint32_t			seg_size;
+
+	if (info != NULL)
+		memset(info, 0, sizeof(*info));
 
 	if (backups == NULL || wal_info == NULL)
 		return NULL;
@@ -1221,19 +1238,24 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
 	result->status = BACKUP_STATUS_OK;
 
 	/*
-	 * Count backups eligible for chain checking: must have valid LSN info
-	 * and must not be ORPHAN.  Orphan backups have a broken chain by
-	 * definition (their parent is gone), so including them would generate
-	 * spurious bridge errors for every gap left by the missing parent.
+	 * Only completed backups (OK, DONE, WARNING) with both LSNs: a restore
+	 * cannot start from ERROR/CORRUPT/ORPHAN/RUNNING ones, and keeping them
+	 * would leave their own LSN range out of every bridge.
 	 */
 	n = 0;
 	for (BackupInfo *b = backups; b != NULL; b = b->next)
-		if (b->start_lsn > 0 && b->stop_lsn > 0 &&
-			b->status != BACKUP_STATUS_ORPHAN)
+		if (chain_eligible(b))
 			n++;
 
 	if (n < 2)
 	{
+		if (info != NULL)
+		{
+			info->backup_count = n;
+			for (BackupInfo *b = backups; b != NULL && n == 1; b = b->next)
+				if (chain_eligible(b))
+					info->first = info->last = b;
+		}
 		log_debug("WAL restore chain: fewer than 2 eligible backups — skipping");
 		return result;
 	}
@@ -1244,11 +1266,17 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
 
 	i = 0;
 	for (BackupInfo *b = backups; b != NULL; b = b->next)
-		if (b->start_lsn > 0 && b->stop_lsn > 0 &&
-			b->status != BACKUP_STATUS_ORPHAN)
+		if (chain_eligible(b))
 			arr[i++] = b;
 
 	qsort(arr, (size_t)n, sizeof(*arr), compare_backup_by_lsn);
+
+	if (info != NULL)
+	{
+		info->backup_count = n;
+		info->first = arr[0];
+		info->last = arr[n - 1];
+	}
 
 	/* Detect segment size from the archive; fall back to 16 MB if unavailable. */
 	seg_size = detect_wal_segment_size(wal_info);
@@ -1407,6 +1435,49 @@ check_wal_restore_chain(BackupInfo *backups, WALArchiveInfo *wal_info)
 
 			/* Safety: prevent runaway loop on malformed input */
 			if (cur.log_id > start_seg.log_id + 1)
+				break;
+		}
+	}
+
+	/*
+	 * Own LSN range of every backup between the first and the last.  Recovery
+	 * from an earlier backup replays it from the archive via restore_command,
+	 * whether that backup took its WAL in archive or stream mode.
+	 */
+	for (i = 1; i < n - 1; i++)
+	{
+		BackupInfo     *mid = arr[i];
+		WALSegmentName	first_seg, last_seg, cur;
+
+		lsn_to_seg(mid->start_lsn, mid->timeline, &first_seg, seg_size);
+		lsn_to_seg(mid->stop_lsn,  mid->timeline, &last_seg,  seg_size);
+
+		cur = first_seg;
+		while (cur.log_id < last_seg.log_id ||
+			   (cur.log_id == last_seg.log_id && cur.seg_id <= last_seg.seg_id))
+		{
+			if (!segment_exists_in_archive(&cur, wal_info))
+			{
+				char seg_filename[32];
+
+				format_wal_filename(&cur, seg_filename, sizeof(seg_filename));
+				format_lsn(mid->start_lsn, lsn_a, sizeof(lsn_a));
+				format_lsn(mid->stop_lsn,  lsn_b, sizeof(lsn_b));
+
+				snprintf(msg, sizeof(msg),
+						 "WAL chain broken: backup %s (start=%s, stop=%s): "
+						 "missing segment %s in the archive",
+						 mid->backup_id, lsn_a, lsn_b, seg_filename);
+				add_error(result, msg);
+				chain_errors++;
+			}
+
+			cur.seg_id++;
+			if (cur.seg_id == 0)
+				cur.log_id++;
+
+			/* Safety: prevent runaway loop on malformed input */
+			if (cur.log_id > last_seg.log_id + 1)
 				break;
 		}
 	}

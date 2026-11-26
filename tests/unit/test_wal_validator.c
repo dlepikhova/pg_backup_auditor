@@ -1608,7 +1608,7 @@ START_TEST(test_chain_null_backups)
 	WALArchiveInfo wi;
 	build_archive(&wi, 1, NULL, 0);
 
-	ValidationResult *r = check_wal_restore_chain(NULL, &wi);
+	ValidationResult *r = check_wal_restore_chain(NULL, &wi, NULL);
 	free(wi.segments);
 	ck_assert_ptr_null(r);
 }
@@ -1619,7 +1619,7 @@ START_TEST(test_chain_null_archive)
 {
 	BackupInfo *b = make_backup_node("B1", 1, 0x1000000, 0x3000000, NULL);
 
-	ValidationResult *r = check_wal_restore_chain(b, NULL);
+	ValidationResult *r = check_wal_restore_chain(b, NULL, NULL);
 	free_chain(b);
 	ck_assert_ptr_null(r);
 }
@@ -1633,7 +1633,7 @@ START_TEST(test_chain_single_backup)
 	const uint32_t  segs[] = {1, 2, 3};
 	build_archive(&wi, 1, segs, 3);
 
-	ValidationResult *r = check_wal_restore_chain(b, &wi);
+	ValidationResult *r = check_wal_restore_chain(b, &wi, NULL);
 	free(wi.segments);
 	free_chain(b);
 
@@ -1657,7 +1657,7 @@ START_TEST(test_chain_adjacent_backups)
 	const uint32_t  segs[] = {1, 2, 3, 4, 5, 6};
 	build_archive(&wi, 1, segs, 6);
 
-	ValidationResult *r = check_wal_restore_chain(b1, &wi);
+	ValidationResult *r = check_wal_restore_chain(b1, &wi, NULL);
 	free(wi.segments);
 	free_chain(b1);
 
@@ -1682,7 +1682,7 @@ START_TEST(test_chain_orphan_skipped)
 	b2->status = BACKUP_STATUS_ORPHAN;
 	build_archive(&wi, 1, segs, 6);
 
-	ValidationResult *r = check_wal_restore_chain(b1, &wi);
+	ValidationResult *r = check_wal_restore_chain(b1, &wi, NULL);
 	free(wi.segments);
 	free_chain(b1);
 
@@ -1704,13 +1704,42 @@ START_TEST(test_chain_complete_bridge)
 	const uint32_t  segs[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
 	build_archive(&wi, 1, segs, 10);
 
-	ValidationResult *r = check_wal_restore_chain(b1, &wi);
+	ValidationResult *r = check_wal_restore_chain(b1, &wi, NULL);
 	free(wi.segments);
 	free_chain(b1);
 
 	ck_assert_ptr_nonnull(r);
 	ck_assert_int_eq(r->error_count, 0);
 	free_validation_result(r);
+}
+END_TEST
+
+/*
+ * Three backups; the archive lacks segment 5 inside B2's own range [4, 6].
+ * Bridges B1→B2 and B2→B3 are empty, so only the middle range catches it.
+ */
+START_TEST(test_chain_missing_inside_middle_backup)
+{
+	BackupInfo     *b3 = make_backup_node("B3", 1, 0x7000000, 0x8000000, NULL);
+	BackupInfo     *b2 = make_backup_node("B2", 1, 0x4000000, 0x6000000, b3);
+	BackupInfo     *b1 = make_backup_node("B1", 1, 0x1000000, 0x3000000, b2);
+	WALArchiveInfo  wi;
+	WalRestoreChainInfo info;
+	const uint32_t  segs[] = {1, 2, 3, 4, 6, 7, 8};
+	build_archive(&wi, 1, segs, 7);
+
+	ValidationResult *r = check_wal_restore_chain(b1, &wi, &info);
+	free(wi.segments);
+
+	ck_assert_ptr_nonnull(r);
+	ck_assert_int_eq(r->error_count, 1);
+	ck_assert(strstr(r->errors[0], "B2") != NULL);
+	ck_assert(strstr(r->errors[0], "000000010000000000000005") != NULL);
+	ck_assert_int_eq(info.backup_count, 3);
+	ck_assert_str_eq(info.first->backup_id, "B1");
+	ck_assert_str_eq(info.last->backup_id, "B3");
+	free_validation_result(r);
+	free_chain(b1);
 }
 END_TEST
 
@@ -1727,7 +1756,7 @@ START_TEST(test_chain_missing_bridge)
 	const uint32_t  segs[] = {1, 2, 3, 4, 7, 8, 9, 10};
 	build_archive(&wi, 1, segs, 8);
 
-	ValidationResult *r = check_wal_restore_chain(b1, &wi);
+	ValidationResult *r = check_wal_restore_chain(b1, &wi, NULL);
 	free(wi.segments);
 	free_chain(b1);
 
@@ -1753,7 +1782,7 @@ START_TEST(test_chain_different_timelines)
 	WALArchiveInfo  wi;
 	build_archive(&wi, 1, NULL, 0);	/* archive_path is empty — no history file */
 
-	ValidationResult *r = check_wal_restore_chain(b1, &wi);
+	ValidationResult *r = check_wal_restore_chain(b1, &wi, NULL);
 	free(wi.segments);
 	free_chain(b1);
 
@@ -1844,7 +1873,7 @@ START_TEST(test_xchain_no_history_file)
 	/* No history file written */
 	build_archive_from_segs(&wi, dir, NULL, 0);
 
-	ValidationResult *r = check_wal_restore_chain(prev, &wi);
+	ValidationResult *r = check_wal_restore_chain(prev, &wi, NULL);
 
 	char cmd[80];
 	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
@@ -1881,7 +1910,7 @@ START_TEST(test_xchain_pre_switch_complete)
 	write_history_file(dir, 2, 1, "0/5000000");
 	build_archive_from_segs(&wi, dir, segs, 5);
 
-	ValidationResult *r = check_wal_restore_chain(prev, &wi);
+	ValidationResult *r = check_wal_restore_chain(prev, &wi, NULL);
 
 	char cmd[80];
 	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
@@ -1915,7 +1944,7 @@ START_TEST(test_xchain_pre_switch_missing)
 	write_history_file(dir, 2, 1, "0/5000000");
 	build_archive_from_segs(&wi, dir, segs, 4);
 
-	ValidationResult *r = check_wal_restore_chain(prev, &wi);
+	ValidationResult *r = check_wal_restore_chain(prev, &wi, NULL);
 
 	char cmd[80];
 	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
@@ -1950,7 +1979,7 @@ START_TEST(test_xchain_post_switch_missing)
 	write_history_file(dir, 2, 1, "0/5000000");
 	build_archive_from_segs(&wi, dir, segs, 4);
 
-	ValidationResult *r = check_wal_restore_chain(prev, &wi);
+	ValidationResult *r = check_wal_restore_chain(prev, &wi, NULL);
 
 	char cmd[80];
 	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
@@ -1990,7 +2019,7 @@ START_TEST(test_xchain_adjacent_to_switch)
 	write_history_file(dir, 2, 1, "0/5000000");
 	build_archive_from_segs(&wi, dir, segs, 1);
 
-	ValidationResult *r = check_wal_restore_chain(prev, &wi);
+	ValidationResult *r = check_wal_restore_chain(prev, &wi, NULL);
 
 	char cmd[80];
 	TEST_SNPRINTF(cmd, "rm -rf %s", dir);
@@ -2407,6 +2436,7 @@ wal_validator_suite(void)
 	tcase_add_test(tc_restore_chain, test_chain_orphan_skipped);
 	tcase_add_test(tc_restore_chain, test_chain_complete_bridge);
 	tcase_add_test(tc_restore_chain, test_chain_missing_bridge);
+	tcase_add_test(tc_restore_chain, test_chain_missing_inside_middle_backup);
 	tcase_add_test(tc_restore_chain, test_chain_different_timelines);
 	suite_add_tcase(s, tc_restore_chain);
 

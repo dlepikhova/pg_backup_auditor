@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `--no-color` was rejected by every command (exit code 4). It is now accepted anywhere on the command line, and colors are off automatically when output is not a terminal, so scripts no longer receive escape codes.
 - Meson build from a clean clone failed at `meson setup`: `meson.build` installed `docs/DEVELOPER.md`, which is not part of the repository.
 - pgBackRest backups with page checksum errors are now detected. The flag is read from `"backup-error":true` in `backup.info`, where pgBackRest records it; the previous check looked for a `backup-error=y` line in `backup.manifest`, which pgBackRest never writes. Such backups are shown as WARNING and reported as an error by `check`.
+- The WAL check between consecutive backups (`audit` Coverage, `check` WAL restore chain) reported OK when fewer than two backups could be compared, i.e. when nothing was checked. It now reports NOT CHECKED with the number of backups found. Only completed backups (OK, DONE or WARNING) are compared; ERROR, CORRUPT, ORPHAN and RUNNING backups no longer split the range, which left their own LSN range unchecked. The WAL inside the LSN range of every backup between the first and the last is now checked as well, since recovery from an earlier backup replays it from the archive in both archive and stream mode; before, a missing segment there was not reported by `audit`. The OK line names the first and last backup compared, and the `check` note about stream backups no longer claims that their WAL is not archived.
+- `pg_backup_auditor help` failed with `Unknown command`. It now prints the general usage, and `help COMMAND` prints the usage of that command.
 
 ### Changed
 
