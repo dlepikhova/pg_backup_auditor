@@ -60,27 +60,6 @@ jobs:
           # same commit either way.
           ref: ${{ env.RELEASE_TAG }}
 
-      - name: Install PostgreSQL (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget gnupg
-          sudo install -d /usr/share/postgresql-common/pgdg
-          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-            | sudo tee /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc > /dev/null
-          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
-            http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-            | sudo tee /etc/apt/sources.list.d/pgdg.list
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends postgresql-17
-
-      - name: Install PostgreSQL (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install postgresql@17
-          echo "$(brew --prefix postgresql@17)/bin" >> "$GITHUB_PATH"
-
       - name: Build
         run: |
           make clean
